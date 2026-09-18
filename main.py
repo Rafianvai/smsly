@@ -24,7 +24,7 @@ ADMIN_UIDS = {ROOT_ADMIN_UID}
 
 # User Database & Active Number Allocations
 USER_DATABASE = {}
-ACTIVE_NUMBER_ALLOCATIONS = {} # {number_string: user_id}
+ACTIVE_NUMBER_ALLOCATIONS = {} 
 
 # Services, Countries & Numbers Database
 SERVICES = [] 
@@ -69,7 +69,7 @@ RAW_APP_EMOJIS = {
     "talabot": {"id": "5336879280578138635"}
 }
 
-# Complete Country Flags Database
+# Complete Country Flags Database (All Countries)
 RAW_FLAG_EMOJIS = {
     "US": {"phone_code": "1", "name": "United States", "id": "5913463998522592692"},
     "UA": {"phone_code": "380", "name": "Ukraine", "id": "5911406692007941050"},
@@ -313,7 +313,6 @@ RAW_FLAG_EMOJIS = {
     "SX": {"phone_code": "1", "name": "Sint Maarten", "id": "5461113820955027461"},
     "BQ": {"phone_code": "599", "name": "Bonaire", "id": "5780471598922337683"}
 }
-
 def get_user_data(user_id):
     if user_id not in USER_DATABASE:
         USER_DATABASE[user_id] = {
@@ -495,12 +494,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg_header = f"🔍 <b>Search Results for:</b> <code>{search_query}</code>\n"
             inline_kb = []
             for srv, cnt, num in matching_numbers[:10]:
-                c_info = RAW_FLAG_EMOJIS.get(cnt, {"name": cnt, "id": "5294193228415801857"})
+                c_info = RAW_FLAG_EMOJIS.get(cnt, {"name": cnt, "id": "5911143844304393105"})
                 btn = {
                     "text": f"[{srv}] {num}",
                     "copy_text": {"text": num},
                     "style": "primary",
-                    "icon_custom_emoji_id": c_info.get("id", "5294193228415801857")
+                    "icon_custom_emoji_id": c_info.get("id", "5911143844304393105")
                 }
                 inline_kb.append([btn])
 
@@ -556,7 +555,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if state == "WAITING_SERV_NAME":
             service_name = text
             lower_name = service_name.lower()
-            matched_id = "5294193228415801857"
+            matched_id = "5911143844304393105"
             for app_key, info in RAW_APP_EMOJIS.items():
                 if app_key in lower_name:
                     matched_id = info["id"]
@@ -589,7 +588,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "code": matched_code,
                         "name": flag_info["name"],
                         "phone_code": flag_info["phone_code"],
-                        "id": flag_info.get("id", "5294193228415801857"),
+                        "id": flag_info.get("id", "5911143844304393105"),
                         "price": c_price
                     })
                     await update.message.reply_text(f"✅ Country {flag_info['name']} added to {srv_name} with price ${c_price:.4f}/OTP!")
@@ -705,14 +704,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_country_numbers(message_obj, user_id, srv_name, c_code, is_edit=False, is_change=True):
     global USER_NUMBER_INDICES
-    srv_emoji_id = "5294193228415801857"
+    srv_emoji_id = "5911143844304393105"
     for s in SERVICES:
         if s["name"] == srv_name:
             srv_emoji_id = s["id"]
             break
 
-    c_info = RAW_FLAG_EMOJIS.get(c_code, {"name": c_code, "phone_code": "000", "id": "5294193228415801857"})
-    all_nums = INBOX_NUMBERS.get((srv_name, c_code), ["2348090240384", "2348090241305", "2348090241791", "2348090248888", "2348090249999"])
+    c_info = RAW_FLAG_EMOJIS.get(c_code, {"name": c_code, "phone_code": "000", "id": "5911143844304393105"})
+    all_nums = INBOX_NUMBERS.get((srv_name, c_code), ["2348090240384", "2348090241305", "2348090241791"])
 
     user_prefix = USER_PREFIXES.get((user_id, srv_name, c_code))
     if user_prefix:
@@ -751,7 +750,7 @@ async def show_country_numbers(message_obj, user_id, srv_name, c_code, is_edit=F
     msg_header = (
         "🔄 <b>These numbers are activated and ready to receive SMS.</b>\n\n"
         f"<tg-emoji emoji-id='{srv_emoji_id}'>💬</tg-emoji> Service: <b>{srv_name}</b>\n"
-        f"<tg-emoji emoji-id='{c_info.get('id', '5294193228415801857')}'>✈️</tg-emoji> Country: {c_info['name']} (+{c_info['phone_code']})"
+        f"<tg-emoji emoji-id='{c_info.get('id', '5911143844304393105')}'>✈️</tg-emoji> Country: {c_info['name']} (+{c_info['phone_code']})"
     )
 
     inline_kb = []
@@ -760,7 +759,7 @@ async def show_country_numbers(message_obj, user_id, srv_name, c_code, is_edit=F
             "text": f"{num}",
             "copy_text": {"text": num},
             "style": "primary",
-            "icon_custom_emoji_id": c_info.get('id', '5294193228415801857')
+            "icon_custom_emoji_id": c_info.get('id', '5911143844304393105')
         }
         inline_kb.append([btn])
 
@@ -924,7 +923,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "text": btn_text,
                 "callback_data": f"select_country_{srv_name}_{c['code']}",
                 "style": btn_style,
-                "icon_custom_emoji_id": c.get("id", "5294193228415801857")
+                "icon_custom_emoji_id": c.get("id", "5911143844304393105")
             }
             inline_kb.append([btn])
         inline_kb.append([{"text": "Back To Services", "callback_data": "back_to_services", "style": "success"}])
@@ -1024,7 +1023,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# --- Webhook / Postback HTTP Handler (Safely parses Provider Parameters) ---
+# --- Webhook / Postback HTTP Handler ---
 async def webhook_handler(request):
     try:
         if request.can_read_body:
@@ -1037,31 +1036,31 @@ async def webhook_handler(request):
     params = dict(request.query)
     params.update(data)
 
-    number = params.get("number") or params.get("called_number") or params.get("phone", "")
+    number = params.get("number") or params.get("called_number", "")
     number = number.strip().replace("+", "")
     if "{{" in number or "}}" in number:
         number = "N/A"
 
-    full_msg = params.get("full_msg") or params.get("smstext") or params.get("text", "N/A")
+    full_msg = params.get("full_msg") or params.get("smstext", "N/A")
     if "{{" in full_msg or "}}" in full_msg:
         full_msg = "N/A"
 
-    otp_code = params.get("otp") or params.get("smstext") or params.get("code", "N/A")
+    otp_code = params.get("otp") or params.get("smstext", "N/A")
     if "{{" in otp_code or "}}" in otp_code:
         otp_code = "N/A"
 
-    service_name = params.get("service", "SMS")
+    service_name = params.get("service", "WhatsApp")
     country_code = params.get("country_code", "US").upper()
     prefix_val = params.get("prefix", "12345")
 
     bot_app = request.app['bot_application']
 
-    # 1. Send to User Inbox
+    # 1. Send to User Inbox (2nd Image format)
     target_user_id = ACTIVE_NUMBER_ALLOCATIONS.get(number)
     if target_user_id:
         srv_info = RAW_APP_EMOJIS.get(service_name.lower(), {"id": "5100676158270211089"})
         user_msg = (
-            "📄 <b>New DID Received!</b>\n"
+            "📧 <tg-emoji emoji-id='5431551436502611633'>📬</tg-emoji> <b>New DID Received!</b>\n"
             f"Number: <code>+{number}</code>\n"
             f"Service: <tg-emoji emoji-id='{srv_info['id']}'>💬</tg-emoji> {service_name}\n"
             f"OTP: <code>{otp_code}</code>\n"
@@ -1084,7 +1083,7 @@ async def webhook_handler(request):
         except Exception as e:
             logging.error(f"Failed to send webhook message to user {target_user_id}: {e}")
 
-    # 2. Send to Public OTP Group
+    # 2. Send to Public OTP Group (1st Image format: Key emoji, ATC Bot link)
     c_info = RAW_FLAG_EMOJIS.get(country_code, {"name": country_code, "id": "5911143844304393105"})
     srv_info = RAW_APP_EMOJIS.get(service_name.lower(), {"id": "5100676158270211089"})
     
@@ -1096,7 +1095,20 @@ async def webhook_handler(request):
     group_kb = {
         "inline_keyboard": [
             [
-                {"text": f"{otp_code}", "copy_text": {"text": otp_code}, "style": "primary", "icon_custom_emoji_id": "5348469219761626211"}
+                {
+                    "text": f"{otp_code}", 
+                    "copy_text": {"text": otp_code}, 
+                    "style": "primary", 
+                    "icon_custom_emoji_id": "5411184095994601436"
+                }
+            ],
+            [
+                {
+                    "text": "🤖 ATC Bot", 
+                    "url": "https://t.me/urbannumber_bot", 
+                    "style": "success", 
+                    "icon_custom_emoji_id": "5337010556253543833"
+                }
             ]
         ]
     }
@@ -1141,5 +1153,5 @@ if __name__ == '__main__':
 
     app.post_init = post_init
 
-    print("Bot with clean provider parameter placeholders check and webhook running...")
+    print("Bot running with ATC Bot link, exact group/inbox formatting, and custom key emoji...")
     app.run_polling()
