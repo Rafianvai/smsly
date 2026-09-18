@@ -1,4 +1,3 @@
-
 import json
 import logging
 import os
@@ -35,7 +34,7 @@ USER_PREFIXES = {}
 USER_NUMBER_INDICES = {}
 
 # Public OTP Group Chat ID
-OTP_GROUP_CHAT_ID = "-1002924519484"
+OTP_GROUP_CHAT_ID = "@PakistanOTPCommunity"
 
 # HTML Emojis
 HTML_EMOJIS = {
@@ -1025,7 +1024,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# --- Webhook / Postback HTTP Handler (Supports JSON & GET query parameters) ---
+# --- Webhook / Postback HTTP Handler (Safely parses Provider Parameters) ---
 async def webhook_handler(request):
     try:
         if request.can_read_body:
@@ -1035,15 +1034,22 @@ async def webhook_handler(request):
     except Exception:
         data = {}
 
-    # Merge GET query parameters and JSON body parameters
     params = dict(request.query)
     params.update(data)
 
-    number = params.get("number") or params.get("called_number", "")
+    number = params.get("number") or params.get("called_number") or params.get("phone", "")
     number = number.strip().replace("+", "")
-    
-    full_msg = params.get("full_msg") or params.get("smstext", "N/A")
-    otp_code = params.get("otp") or params.get("smstext", "N/A")
+    if "{{" in number or "}}" in number:
+        number = "N/A"
+
+    full_msg = params.get("full_msg") or params.get("smstext") or params.get("text", "N/A")
+    if "{{" in full_msg or "}}" in full_msg:
+        full_msg = "N/A"
+
+    otp_code = params.get("otp") or params.get("smstext") or params.get("code", "N/A")
+    if "{{" in otp_code or "}}" in otp_code:
+        otp_code = "N/A"
+
     service_name = params.get("service", "SMS")
     country_code = params.get("country_code", "US").upper()
     prefix_val = params.get("prefix", "12345")
@@ -1135,5 +1141,5 @@ if __name__ == '__main__':
 
     app.post_init = post_init
 
-    print("Bot with complete flags, dynamic port webhook, and provider parameters support is running...")
+    print("Bot with clean provider parameter placeholders check and webhook running...")
     app.run_polling()
