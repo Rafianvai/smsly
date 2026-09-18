@@ -61,7 +61,6 @@ RAW_APP_EMOJIS = {
     "talabot": {"id": "5336879280578138635"}
 }
 
-# Complete Country Flags Database (All Countries)
 RAW_FLAG_EMOJIS = {
     "US": {"phone_code": "1", "name": "United States", "id": "5913463998522592692"},
     "UA": {"phone_code": "380", "name": "Ukraine", "id": "5911406692007941050"},
@@ -170,7 +169,7 @@ RAW_FLAG_EMOJIS = {
     "XK": {"phone_code": "383", "name": "Kosovo", "id": "5911433681582429010"},
     "KW": {"phone_code": "965", "name": "Kuwait", "id": "5913290705182134003"},
     "KG": {"phone_code": "996", "name": "Kyrgyzstan", "id": "5911202161370337549"},
-    "LA": {"phone_code": "856", "name": "Lao People's Democratic Republic", "id": "5913718526874489279"},
+    "LA": {"phone_code": "856", "name": "Laos", "id": "5913718526874489279"},
     "LV": {"phone_code": "371", "name": "Latvia", "id": "5913738489882480243"},
     "LB": {"phone_code": "961", "name": "Lebanon", "id": "5911504273664905447"},
     "LS": {"phone_code": "266", "name": "Lesotho", "id": "5911059881988723711"},
@@ -305,6 +304,7 @@ RAW_FLAG_EMOJIS = {
     "SX": {"phone_code": "1", "name": "Sint Maarten", "id": "5461113820955027461"},
     "BQ": {"phone_code": "599", "name": "Bonaire", "id": "5780471598922337683"}
 }
+
 def get_user_data(user_id):
     if user_id not in USER_DATABASE:
         USER_DATABASE[user_id] = {
@@ -504,6 +504,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             srv_name = context.user_data.get("current_service")
             c_code = context.user_data.get("current_country")
             
+            all_nums = INBOX_NUMBERS.get((srv_name, c_code), [])
+            matching_nums = [n for n in all_nums if prefix_val in n]
+
+            if not matching_nums:
+                if (user_id, srv_name, c_code) in USER_PREFIXES:
+                    del USER_PREFIXES[(user_id, srv_name, c_code)]
+                context.user_data["state"] = None
+                await update.message.reply_text(
+                    f"⚠️ <b>No numbers found for prefix:</b> <code>{prefix_val}</code>.\nPrefix has been automatically removed. You can try setting another prefix.",
+                    parse_mode="HTML"
+                )
+                await show_country_numbers(update.message, user_id, srv_name, c_code, is_edit=False, is_change=False)
+                return
+
             USER_PREFIXES[(user_id, srv_name, c_code)] = prefix_val
             USER_NUMBER_INDICES[(user_id, srv_name, c_code)] = 0
             context.user_data["state"] = None
@@ -708,12 +722,16 @@ async def show_country_numbers(message_obj, user_id, srv_name, c_code, is_edit=F
     user_prefix = USER_PREFIXES.get((user_id, srv_name, c_code))
     if user_prefix:
         filtered_nums = [n for n in all_nums if user_prefix in n]
-        nums = [f"+{n}" if not n.startswith("+") else n for n in filtered_nums]
+        if not filtered_nums:
+            del USER_PREFIXES[(user_id, srv_name, c_code)]
+            nums = [f"+{n}" if not n.startswith("+") else n for n in all_nums]
+        else:
+            nums = [f"+{n}" if not n.startswith("+") else n for n in filtered_nums]
     else:
         nums = [f"+{n}" if not n.startswith("+") else n for n in all_nums]
 
     if not nums:
-        no_num_msg = "⚠️ <b>No numbers available for this prefix.</b>"
+        no_num_msg = "⚠️ <b>No numbers available.</b>"
         if is_edit:
             try:
                 await message_obj.edit_text(text=no_num_msg, parse_mode="HTML")
@@ -1026,10 +1044,11 @@ def detect_service_country_and_language(full_msg, number):
             service_id = info["id"]
             break
 
+    # Robust country detection based strictly on number prefix (longest match first)
+    clean_num = number.replace("+", "").strip()
     country_code = "US"
     country_info = RAW_FLAG_EMOJIS["US"]
     
-    clean_num = number.replace("+", "").strip()
     sorted_countries = sorted(RAW_FLAG_EMOJIS.items(), key=lambda x: len(x[1]["phone_code"]), reverse=True)
     for code, info in sorted_countries:
         p_code = info["phone_code"]
@@ -1040,7 +1059,6 @@ def detect_service_country_and_language(full_msg, number):
 
     prefix_val = clean_num[:6] if len(clean_num) >= 6 else clean_num
 
-    # Auto detect language
     lang_name = "English"
     if any(c in full_msg for c in "ěščřžýáíéúůťďňĚŠČŘŽÝÁÍÉÚŮŤĎŇ"):
         lang_name = "Czech"
@@ -1109,7 +1127,6 @@ async def webhook_handler(request):
         except Exception as e:
             logging.error(f"Failed to send webhook message: {e}")
 
-    # Group message format update (Without admin text, with detected app emoji for Full Msg button, and custom envelope emoji id)
     group_msg = (
         f"Container\n"
         f"<tg-emoji emoji-id='{c_info['id']}'>🌐</tg-emoji> #{country_code} <tg-emoji emoji-id='{srv_emoji_id}'>💬</tg-emoji> {number} #{lang_name}\n"
