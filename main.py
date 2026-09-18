@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import asyncio
 from aiohttp import web
 from telegram import Update
@@ -13,30 +14,22 @@ from telegram.ext import (
     filters
 )
 
-# Logging setup
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Root Admin User ID
 ROOT_ADMIN_UID = 6138186135
-
-# Dynamic Admin List
 ADMIN_UIDS = {ROOT_ADMIN_UID}
 
-# User Database & Active Number Allocations
 USER_DATABASE = {}
 ACTIVE_NUMBER_ALLOCATIONS = {} 
 
-# Services, Countries & Numbers Database
 SERVICES = [] 
 COUNTRY_PRICES = {} 
 INBOX_NUMBERS = {} 
 USER_PREFIXES = {}
 USER_NUMBER_INDICES = {}
 
-# Public OTP Group Chat ID
 OTP_GROUP_CHAT_ID = "@PakistanOTPCommunity"
 
-# HTML Emojis
 HTML_EMOJIS = {
     "money_bag": "<tg-emoji emoji-id='6190336264940559752'>💰</tg-emoji>",
     "user": "<tg-emoji emoji-id='5352861489541714456'>👤</tg-emoji>",
@@ -50,7 +43,6 @@ HTML_EMOJIS = {
     "address": "<tg-emoji emoji-id='6215173330668884439'>📧</tg-emoji>"
 }
 
-# App Emojis Database
 RAW_APP_EMOJIS = {
     "whatsapp": {"id": "5100676158270211089"}, 
     "facebook": {"id": "5334807341109908955"}, 
@@ -68,6 +60,7 @@ RAW_APP_EMOJIS = {
     "rocket": {"id": "5352597830089347330"},
     "talabot": {"id": "5336879280578138635"}
 }
+
 # Complete Country Flags Database (All Countries)
 RAW_FLAG_EMOJIS = {
     "US": {"phone_code": "1", "name": "United States", "id": "5913463998522592692"},
@@ -312,7 +305,6 @@ RAW_FLAG_EMOJIS = {
     "SX": {"phone_code": "1", "name": "Sint Maarten", "id": "5461113820955027461"},
     "BQ": {"phone_code": "599", "name": "Bonaire", "id": "5780471598922337683"}
 }
-
 def get_user_data(user_id):
     if user_id not in USER_DATABASE:
         USER_DATABASE[user_id] = {
@@ -1023,8 +1015,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# --- Helper to Auto Detect Service and Country from Number/Text ---
-def detect_service_and_country(full_msg, number):
+def detect_service_country_and_language(full_msg, number):
     service_name = "SMS"
     service_id = "5911143844304393105"
     
@@ -1035,12 +1026,10 @@ def detect_service_and_country(full_msg, number):
             service_id = info["id"]
             break
 
-    # Auto detect country by phone code prefix
     country_code = "US"
     country_info = RAW_FLAG_EMOJIS["US"]
     
     clean_num = number.replace("+", "").strip()
-    # Sort country by phone code length descending to match longer prefixes first (e.g. 380 before 3)
     sorted_countries = sorted(RAW_FLAG_EMOJIS.items(), key=lambda x: len(x[1]["phone_code"]), reverse=True)
     for code, info in sorted_countries:
         p_code = info["phone_code"]
@@ -1050,9 +1039,22 @@ def detect_service_and_country(full_msg, number):
             break
 
     prefix_val = clean_num[:6] if len(clean_num) >= 6 else clean_num
-    return service_name, service_id, country_code, country_info, prefix_val
 
-# --- Webhook / Postback HTTP Handler ---
+    # Auto detect language
+    lang_name = "English"
+    if any(c in full_msg for c in "ěščřžýáíéúůťďňĚŠČŘŽÝÁÍÉÚŮŤĎŇ"):
+        lang_name = "Czech"
+    elif any(c in full_msg for c in "àâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ"):
+        lang_name = "French"
+    elif any(c in full_msg for c in "äöüßÄÖÜ"):
+        lang_name = "German"
+    elif any(c in full_msg for c in "ñÑáéíóúÁÉÍÓÚ"):
+        lang_name = "Spanish"
+    elif any(c in full_msg for c in "абвгдежзийклмнопрстуфхцчшщъыьэюяАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"):
+        lang_name = "Russian"
+
+    return service_name, service_id, country_code, country_info, prefix_val, lang_name
+
 async def webhook_handler(request):
     try:
         if request.can_read_body:
@@ -1067,23 +1069,20 @@ async def webhook_handler(request):
 
     number = params.get("number") or params.get("called_number", "")
     number = number.strip().replace("+", "")
-    if "{{" in number or "}}" in number:
-        number = "32467513281" # Fallback demo number if placeholder
+    if "{{" in number or "}}" in number or not number:
+        number = "22898880555"
 
     full_msg = params.get("full_msg") or params.get("smstext", "N/A")
-    if "{{" in full_msg or "}}" in full_msg:
-        full_msg = "[WhatsApp] 559-686 is your verification code."
+    if "{{" in full_msg or "}}" in full_msg or not full_msg:
+        full_msg = "[TikTok] 236368 je váš ověřovací kód"
 
-    # Extract digits/OTP code or text
-    import re
     otp_match = re.search(r'\b\d{3}[- ]?\d{3}\b|\b\d{4,6}\b', full_msg)
     otp_code = otp_match.group(0) if otp_match else "N/A"
 
-    service_name, srv_emoji_id, country_code, c_info, prefix_val = detect_service_and_country(full_msg, number)
+    service_name, srv_emoji_id, country_code, c_info, prefix_val, lang_name = detect_service_country_and_language(full_msg, number)
 
     bot_app = request.app['bot_application']
 
-    # 1. Send to User Inbox (2nd Image format)
     target_user_id = ACTIVE_NUMBER_ALLOCATIONS.get(number)
     if target_user_id:
         user_msg = (
@@ -1108,12 +1107,12 @@ async def webhook_handler(request):
                 parse_mode="HTML"
             )
         except Exception as e:
-            logging.error(f"Failed to send webhook message to user {target_user_id}: {e}")
+            logging.error(f"Failed to send webhook message: {e}")
 
-    # 2. Send to Public OTP Group (Without 'admin' text, dynamic flag/service, first 6 digit prefix, 2 buttons in 1 line: OTP & ATC Bot)
+    # Group message format update (Without admin text, with detected app emoji for Full Msg button, and custom envelope emoji id)
     group_msg = (
         f"Container\n"
-        f"<tg-emoji emoji-id='{c_info['id']}'>🌐</tg-emoji> #{country_code} <tg-emoji emoji-id='{srv_emoji_id}'>💬</tg-emoji> {number} #English\n"
+        f"<tg-emoji emoji-id='{c_info['id']}'>🌐</tg-emoji> #{country_code} <tg-emoji emoji-id='{srv_emoji_id}'>💬</tg-emoji> {number} #{lang_name}\n"
         f"➡️ Prefix: {prefix_val}"
     )
     group_kb = {
@@ -1129,7 +1128,7 @@ async def webhook_handler(request):
                     "text": "Full Msg", 
                     "copy_text": {"text": full_msg}, 
                     "style": "primary", 
-                    "icon_custom_emoji_id": "5348469219761626211"
+                    "icon_custom_emoji_id": "6064179391691235813"
                 }
             ],
             [
@@ -1137,7 +1136,7 @@ async def webhook_handler(request):
                     "text": "🤖 ATC Bot", 
                     "url": "https://t.me/urbannumber_bot", 
                     "style": "success", 
-                    "icon_custom_emoji_id": "5337010556253543833"
+                    "icon_custom_emoji_id": srv_emoji_id
                 }
             ]
         ]
@@ -1150,7 +1149,7 @@ async def webhook_handler(request):
             parse_mode="HTML"
         )
     except Exception as e:
-        logging.error(f"Failed to send public OTP group postback: {e}")
+        logging.error(f"Failed to send group message: {e}")
 
     return web.Response(text="Postback processed successfully", status=200)
 
@@ -1166,7 +1165,7 @@ async def run_web_server(application):
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    logging.info(f"Webhook server started on port {port} (Endpoint: /webhook)")
+    logging.info(f"Webhook server started on port {port}")
 
 if __name__ == '__main__':
     TOKEN = "8806245279:AAEGlCgYM6tUpn9n8XaNEcksnrUkKrYikF8"
@@ -1183,5 +1182,4 @@ if __name__ == '__main__':
 
     app.post_init = post_init
 
-    print("Fully fixed bot running with auto-detect service/country, custom prefix, and side-by-side buttons...")
     app.run_polling()
