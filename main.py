@@ -418,50 +418,111 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = ""
 
-    if user_id in ADMIN_UIDS and state == "WAITING_BROADCAST_MSG":
-        context.user_data["state"] = None
-        broadcast_count = 0
-        failed_count = 0
-        
-        for uid in list(USER_DATABASE.keys()):
+    # --- ADMIN STATES HANDLER ---
+    if user_id in ADMIN_UIDS:
+        if state == "WAITING_BROADCAST_MSG":
+            context.user_data["state"] = None
+            broadcast_count = 0
+            failed_count = 0
+            for uid in list(USER_DATABASE.keys()):
+                try:
+                    await context.bot.copy_message(chat_id=uid, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
+                    broadcast_count += 1
+                except Exception:
+                    failed_count += 1
+            await update.message.reply_text(f"📢 <b>Broadcast Completed!</b>\n\n✅ Sent: <b>{broadcast_count}</b>\n❌ Failed: <b>{failed_count}</b>", parse_mode="HTML")
+            return
+
+        elif state == "WAITING_NEW_ADMIN_ID":
+            context.user_data["state"] = None
             try:
-                await context.bot.copy_message(chat_id=uid, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
-                broadcast_count += 1
+                new_admin_id = int(text)
+                ADMIN_UIDS.add(new_admin_id)
+                await update.message.reply_text(f"✅ Success! User ID <code>{new_admin_id}</code> added as Admin.", parse_mode="HTML")
+            except ValueError:
+                await update.message.reply_text("❌ Invalid numeric User ID!")
+            return
+
+        elif state == "WAITING_REMOVE_ADMIN_ID":
+            context.user_data["state"] = None
+            try:
+                rem_admin_id = int(text)
+                if rem_admin_id == ROOT_ADMIN_UID:
+                    await update.message.reply_text("❌ Cannot remove Root Admin!")
+                elif rem_admin_id in ADMIN_UIDS:
+                    ADMIN_UIDS.remove(rem_admin_id)
+                    await update.message.reply_text(f"✅ Success! User ID <code>{rem_admin_id}</code> removed.", parse_mode="HTML")
+                else:
+                    await update.message.reply_text("❌ User ID not found in Admin list.")
+            except ValueError:
+                await update.message.reply_text("❌ Invalid numeric User ID!")
+            return
+
+        elif state == "WAITING_SERV_NAME":
+            service_name = text
+            lower_name = service_name.lower()
+            matched_id = "5911143844304393105"
+            for app_key, info in RAW_APP_EMOJIS.items():
+                if app_key in lower_name:
+                    matched_id = info["id"]
+                    break
+            SERVICES.append({"name": service_name, "id": matched_id})
+            await update.message.reply_text(f"✅ Success! Service <b>{service_name}</b> added.", parse_mode="HTML")
+            context.user_data["state"] = None
+            return
+
+        elif state == "WAITING_COUNTRY_PRICE":
+            try:
+                parts = text.rsplit(" ", 1)
+                country_input = parts[0].strip().upper()
+                c_price = float(parts[1])
+                srv_name = context.user_data.get("target_service")
+
+                matched_code = None
+                for code, info in RAW_FLAG_EMOJIS.items():
+                    if country_input == code or country_input in info["name"].upper():
+                        matched_code = code
+                        break
+
+                if matched_code:
+                    flag_info = RAW_FLAG_EMOJIS[matched_code]
+                    if srv_name not in COUNTRY_PRICES:
+                        COUNTRY_PRICES[srv_name] = []
+                    COUNTRY_PRICES[srv_name].append({
+                        "code": matched_code,
+                        "name": flag_info["name"],
+                        "phone_code": flag_info["phone_code"],
+                        "id": flag_info.get("id", "5911143844304393105"),
+                        "price": c_price
+                    })
+                    await update.message.reply_text(f"✅ Country {flag_info['name']} added to {srv_name} at ${c_price:.4f}/OTP!")
+                else:
+                    await update.message.reply_text("❌ Invalid Country Code or Name!")
             except Exception:
-                failed_count += 1
+                await update.message.reply_text("❌ Invalid format! Use: [Country] [Price]")
+            context.user_data["state"] = None
+            return
 
-        await update.message.reply_text(
-            f"📢 <b>Broadcast Completed!</b>\n\n"
-            f"✅ Successfully sent: <b>{broadcast_count}</b> users\n"
-            f"❌ Failed: <b>{failed_count}</b> users",
-            parse_mode="HTML"
-        )
-        return
+        elif state == "WAITING_NUMBER_FILE":
+            if update.message.document:
+                file = await update.message.document.get_file()
+                file_bytes = await file.download_as_bytearray()
+                file_content = file_bytes.decode("utf-8", errors="ignore")
+                
+                lines = [line.strip() for line in file_content.splitlines() if line.strip()]
+                srv_name = context.user_data.get("upload_srv")
+                c_code = context.user_data.get("upload_cnt")
 
-    if user_id == ROOT_ADMIN_UID and state == "WAITING_NEW_ADMIN_ID":
-        context.user_data["state"] = None
-        try:
-            new_admin_id = int(text)
-            ADMIN_UIDS.add(new_admin_id)
-            await update.message.reply_text(f"✅ Success! User ID <code>{new_admin_id}</code> is now an Admin.", parse_mode="HTML")
-        except ValueError:
-            await update.message.reply_text("❌ Invalid User ID!")
-        return
+                key = (srv_name, c_code)
+                if key not in INBOX_NUMBERS:
+                    INBOX_NUMBERS[key] = []
+                INBOX_NUMBERS[key].extend(lines)
 
-    if user_id == ROOT_ADMIN_UID and state == "WAITING_REMOVE_ADMIN_ID":
-        context.user_data["state"] = None
-        try:
-            rem_admin_id = int(text)
-            if rem_admin_id == ROOT_ADMIN_UID:
-                await update.message.reply_text("❌ You cannot remove the Root Admin!")
-            elif rem_admin_id in ADMIN_UIDS:
-                ADMIN_UIDS.remove(rem_admin_id)
-                await update.message.reply_text(f"✅ Success! User ID <code>{rem_admin_id}</code> has been removed from Admins.", parse_mode="HTML")
+                await update.message.reply_text(f"✅ Successfully uploaded <b>{len(lines)}</b> numbers for <b>{srv_name}</b> ({c_code})!", parse_mode="HTML")
             else:
-                await update.message.reply_text("❌ This User ID is not in the Admin list.")
-        except ValueError:
-            await update.message.reply_text("❌ Invalid User ID!")
-        return
+                await update.message.reply_text("❌ Please upload a valid .txt file.")
+            context.user_data["state"] = None
+            return
 
     if text == "Live Traffic":
         await send_live_traffic(update.message, is_edit=False)
@@ -471,13 +532,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text:
             search_query = text
             context.user_data["state"] = None
-            
             matching_numbers = []
             for (srv, cnt), nums in INBOX_NUMBERS.items():
                 for n in nums:
                     if search_query in n:
                         formatted_n = f"+{n}" if not n.startswith("+") else n
                         matching_numbers.append((srv, cnt, formatted_n))
+                        if len(matching_numbers) >= 10:
+                            break
+                if len(matching_numbers) >= 10:
+                    break
 
             if not matching_numbers:
                 await update.message.reply_text(f"⚠️ <b>No numbers found matching query:</b> <code>{search_query}</code>", parse_mode="HTML")
@@ -511,10 +575,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if (user_id, srv_name, c_code) in USER_PREFIXES:
                     del USER_PREFIXES[(user_id, srv_name, c_code)]
                 context.user_data["state"] = None
-                await update.message.reply_text(
-                    f"⚠️ <b>No numbers found for prefix:</b> <code>{prefix_val}</code>.\nPrefix has been automatically removed. You can try setting another prefix.",
-                    parse_mode="HTML"
-                )
+                await update.message.reply_text(f"⚠️ <b>No numbers found for prefix:</b> <code>{prefix_val}</code>. Prefix removed.", parse_mode="HTML")
                 await show_country_numbers(update.message, user_id, srv_name, c_code, is_edit=False, is_change=False)
                 return
 
@@ -522,30 +583,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             USER_NUMBER_INDICES[(user_id, srv_name, c_code)] = 0
             context.user_data["state"] = None
             await update.message.reply_text(f"✅ Prefix successfully set to: <code>{prefix_val}</code>", parse_mode="HTML")
-            
             await show_country_numbers(update.message, user_id, srv_name, c_code, is_edit=False, is_change=False)
-            return
-
-    if user_id in ADMIN_UIDS and state == "WAITING_NUMBER_FILE":
-        if update.message.document:
-            file = await update.message.document.get_file()
-            file_bytes = await file.download_as_bytearray()
-            file_content = file_bytes.decode("utf-8", errors="ignore")
-            
-            lines = [line.strip() for line in file_content.splitlines() if line.strip()]
-            srv_name = context.user_data.get("upload_srv")
-            c_code = context.user_data.get("upload_cnt")
-
-            key = (srv_name, c_code)
-            if key not in INBOX_NUMBERS:
-                INBOX_NUMBERS[key] = []
-            INBOX_NUMBERS[key].extend(lines)
-
-            await update.message.reply_text(f"✅ Successfully uploaded <b>{len(lines)}</b> numbers for <b>{srv_name}</b> ({c_code})!", parse_mode="HTML")
-            context.user_data["state"] = None
-            return
-        else:
-            await update.message.reply_text("❌ Please upload a valid .txt file containing numbers.")
             return
 
     if not text:
@@ -554,57 +592,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == "WAITING_WALLET":
         u_data["wallet"] = text
         context.user_data["state"] = None
-        await update.message.reply_text(f"✅ Success! Your Binance UID/Address has been set to: <code>{text}</code>", parse_mode="HTML")
+        await update.message.reply_text(f"✅ Success! Your Binance Wallet/UID set to: <code>{text}</code>", parse_mode="HTML")
         return
-
-    if user_id in ADMIN_UIDS:
-        if state == "WAITING_SERV_NAME":
-            service_name = text
-            lower_name = service_name.lower()
-            matched_id = "5911143844304393105"
-            for app_key, info in RAW_APP_EMOJIS.items():
-                if app_key in lower_name:
-                    matched_id = info["id"]
-                    break
-            
-            SERVICES.append({"name": service_name, "id": matched_id})
-            await update.message.reply_text(f"✅ Success! Service **{service_name}** successfully added.", parse_mode="Markdown")
-            context.user_data["state"] = None
-            return
-
-        elif state == "WAITING_COUNTRY_PRICE":
-            try:
-                parts = text.rsplit(" ", 1)
-                country_input = parts[0].strip().upper()
-                c_price = float(parts[1])
-                srv_name = context.user_data.get("target_service")
-
-                matched_code = None
-                for code, info in RAW_FLAG_EMOJIS.items():
-                    if country_input == code or country_input in info["name"].upper():
-                        matched_code = code
-                        break
-
-                if matched_code:
-                    flag_info = RAW_FLAG_EMOJIS[matched_code]
-                    if srv_name not in COUNTRY_PRICES:
-                        COUNTRY_PRICES[srv_name] = []
-                    
-                    COUNTRY_PRICES[srv_name].append({
-                        "code": matched_code,
-                        "name": flag_info["name"],
-                        "phone_code": flag_info["phone_code"],
-                        "id": flag_info.get("id", "5911143844304393105"),
-                        "price": c_price
-                    })
-                    await update.message.reply_text(f"✅ Country {flag_info['name']} added to {srv_name} with price ${c_price:.4f}/OTP!")
-                else:
-                    await update.message.reply_text("❌ Invalid Country!")
-            except Exception as e:
-                await update.message.reply_text("❌ Maling format!")
-            
-            context.user_data["state"] = None
-            return
 
     if text == "Withdraw":
         wallet_text = u_data["wallet"]
@@ -663,10 +652,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "Search Number":
         context.user_data["state"] = "WAITING_SEARCH_QUERY"
-        await update.message.reply_text(
-            text="🔍 <b>Send number prefix to search (e.g. 234809):</b>",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(text="🔍 <b>Send number prefix to search (e.g. 234809):</b>", parse_mode="HTML")
 
     elif text == "Help":
         help_text = (
@@ -700,9 +686,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ],
                 [
                     {"text": "📢 Broadcast", "callback_data": "btn_broadcast_start", "style": "primary"}
-                ],
-                [
-                    {"text": "View Services", "callback_data": "btn_list_services", "style": "primary"}
                 ]
             ]
         }
@@ -1044,7 +1027,6 @@ def detect_service_country_and_language(full_msg, number):
             service_id = info["id"]
             break
 
-    # Robust country detection based strictly on number prefix (longest match first)
     clean_num = number.replace("+", "").strip()
     country_code = "US"
     country_info = RAW_FLAG_EMOJIS["US"]
@@ -1185,7 +1167,7 @@ async def run_web_server(application):
     logging.info(f"Webhook server started on port {port}")
 
 if __name__ == '__main__':
-    TOKEN = "8806245279:AAEGlCgYM6tUpn9n8XaNEcksnrUkKrYikF8"
+    TOKEN = "8806245279:AAF5ZmzILNkpqhrt7x0ogl_WxQM_kBj3IGs"
     
     app = ApplicationBuilder().token(TOKEN).build()
     
