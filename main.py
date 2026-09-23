@@ -600,7 +600,7 @@ TOKEN = base64.b64decode(
     'Vmxobw=='
 ).decode()
 TARGET_GROUP_IDS = [-1003783166578] 
-WEBHOOK_PORT = 8080 
+WEBHOOK_PORT = int(os.environ.get("PORT", 8080)) 
 
 http_client = httpx.AsyncClient(
     timeout=httpx.Timeout(20.0, connect=5.0, read=15.0), 
@@ -1012,6 +1012,9 @@ async def handle_postback(request):
 
 async def start_webhook_server():
     app = web.Application()
+    app.router.add_post('/webhook', handle_postback)
+    app.router.add_get('/webhook', handle_postback)
+    # Keep the old endpoint for backwards compatibility.
     app.router.add_post('/postback', handle_postback)
     app.router.add_get('/postback', handle_postback)
     runner = web.AppRunner(app)
