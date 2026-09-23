@@ -723,24 +723,63 @@ async def edit_rich_message(bot, chat_id, message_id, text, keyboard_rows, parse
 # --- KEYBOARD LAYOUT ARCHITECTURE ---
 # =========================================================================
 def build_admin_main(uid):
-    # ReplyKeyboardMarkup requires KeyboardButton objects/strings; the old
-    # version passed Telegram Bot API dicts here, which causes PTB errors.
+    # Telegram Bot API 9.4+ supports colored reply-keyboard buttons and
+    # custom-emoji icons. python-telegram-bot 22.7+ exposes both fields.
+    def btn(text, style, icon):
+        return KeyboardButton(
+            text=text,
+            style=style,
+            icon_custom_emoji_id=icon,
+        )
+
     rows = [
-        [KeyboardButton("Number Upload"), KeyboardButton("Number Delete")],
-        [KeyboardButton("User List"), KeyboardButton("Withdraw Requests")],
-        [KeyboardButton("Admin Settings"), KeyboardButton("Broadcast")],
+        [
+            btn("Number Upload", "success", "5353001161878182134"),
+            btn("Number Delete", "danger", "5422557736330106570"),
+        ],
+        [
+            btn("User List", "primary", "5352861489541714456"),
+            btn("Withdraw Requests", "success", "5348469219761626211"),
+        ],
+        [
+            btn("Admin Settings", "primary", "5420155432272438703"),
+            btn("Broadcast", "primary", "5352980533150259581"),
+        ],
     ]
     if uid == SUPER_ADMIN_ID:
-        rows.append([KeyboardButton("Upload User Data")])
-    rows.append([KeyboardButton("/start")])
+        rows.append([
+            btn("Upload User Data", "success", "5353001161878182134")
+        ])
+    rows.append([
+        btn("/start", "success", "5352694861990501856")
+    ])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
+
 def build_user_main():
+    def btn(text, style, icon):
+        return KeyboardButton(
+            text=text,
+            style=style,
+            icon_custom_emoji_id=icon,
+        )
+
     rows = [
-        [KeyboardButton("Get Number 3"), KeyboardButton("Get Number 10")],
-        [KeyboardButton("My Balance"), KeyboardButton("Withdraw Funds")],
-        [KeyboardButton("Leaderboard"), KeyboardButton("Stock History")],
-        [KeyboardButton("/start")],
+        [
+            btn("Get Number 3", "success", "5352597830089347330"),
+            btn("Get Number 10", "success", "5337267511261960341"),
+        ],
+        [
+            btn("My Balance", "primary", "5190899075968441286"),
+            btn("Withdraw Funds", "danger", "5348469219761626211"),
+        ],
+        [
+            btn("Leaderboard", "primary", "5352877703043258544"),
+            btn("Stock History", "primary", "5352721946054268944"),
+        ],
+        [
+            btn("/start", "success", "5352694861990501856")
+        ],
     ]
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
