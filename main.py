@@ -1,64 +1,91 @@
-import json
 import logging
 import os
-import re
+import sys
 import asyncio
+import re
+import httpx
+import hashlib
+import json
+import html
+from io import StringIO, BytesIO
+from datetime import datetime, timedelta, timezone
 from aiohttp import web
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.request import HTTPXRequest
 from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    filters
+    ApplicationBuilder, 
+    CommandHandler, 
+    MessageHandler, 
+    filters, 
+    ContextTypes, 
+    CallbackQueryHandler
 )
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# =========================================================================
+# --- WINDOWS TERMINAL UNICODE FIX & ADVANCED LOGGING ---
+# =========================================================================
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
-ROOT_ADMIN_UID = 6138186135
-ADMIN_UIDS = {ROOT_ADMIN_UID}
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler("bot_core_debug.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
-USER_DATABASE = {}
-ACTIVE_NUMBER_ALLOCATIONS = {} 
-
-SERVICES = [] 
-COUNTRY_PRICES = {} 
-INBOX_NUMBERS = {} 
-USER_PREFIXES = {}
-USER_NUMBER_INDICES = {}
-
-OTP_GROUP_CHAT_ID = "@PakistanOTPCommunity"
-
-HTML_EMOJIS = {
-    "money_bag": "<tg-emoji emoji-id='6190336264940559752'>💰</tg-emoji>",
-    "user": "<tg-emoji emoji-id='5352861489541714456'>👤</tg-emoji>",
-    "balance": "<tg-emoji emoji-id='5776103539872896061'>💵</tg-emoji>",
-    "paid": "<tg-emoji emoji-id='5395444784611480792'>📦</tg-emoji>",
-    "referral": "<tg-emoji emoji-id='5334590977837403844'>👥</tg-emoji>",
-    "otp": "<tg-emoji emoji-id='6093587384954262033'>📬</tg-emoji>",
-    "warn": "<tg-emoji emoji-id='5336944168944047463'>⚠️</tg-emoji>",
-    "fee": "<tg-emoji emoji-id='5895592588064328942'>💳</tg-emoji>",
-    "card": "<tg-emoji emoji-id='5348469219761626211'>💳</tg-emoji>",
-    "address": "<tg-emoji emoji-id='6215173330668884439'>📧</tg-emoji>"
-}
-
-RAW_APP_EMOJIS = {
-    "whatsapp": {"id": "5100676158270211089"}, 
-    "facebook": {"id": "5334807341109908955"}, 
-    "telegram": {"id": "5337010556253543833"}, 
-    "imo": {"id": "5337155807752524558"},
-    "instagram": {"id": "5334868205091459431"}, 
-    "apple": {"id": "5334637951894722661"},
-    "google": {"id": "5335010201005231986"}, 
-    "microsoft": {"id": "5334880948259427772"},
-    "tiktok": {"id": "5339213256001102461"}, 
-    "amazon": {"id": "4995019580536524226"},
-    "paypal": {"id": "5776103539872896061"},
-    "discord": {"id": "5116246243646898866"},
-    "bkash": {"id": "5348469219761626211"}, 
-    "rocket": {"id": "5352597830089347330"},
-    "talabot": {"id": "5336879280578138635"}
+# =========================================================================
+# --- PREMIUM EMOJI & FULL RAW FLAG DATABASES ---
+# =========================================================================
+PEM = {
+    "ok": '<tg-emoji emoji-id="5352694861990501856"></tg-emoji>',
+    "no": '<tg-emoji emoji-id="5420130255174145507"></tg-emoji>',
+    "warn": '<tg-emoji emoji-id="5336944168944047463"></tg-emoji>',
+    "admin": '<tg-emoji emoji-id="5353032893096567467"></tg-emoji>',
+    "user": '<tg-emoji emoji-id="5352861489541714456"></tg-emoji>',
+    "file": '<tg-emoji emoji-id="5352721946054268944"></tg-emoji>',
+    "rocket": '<tg-emoji emoji-id="5352597830089347330"></tg-emoji>',
+    "graph": '<tg-emoji emoji-id="5352877703043258544"></tg-emoji>',
+    "money": '<tg-emoji emoji-id="5348469219761626211"></tg-emoji>',
+    "gift": '<tg-emoji emoji-id="5420396762189831222"></tg-emoji>',
+    "msg": '<tg-emoji emoji-id="5337302974806922068"></tg-emoji>',
+    "gear": '<tg-emoji emoji-id="5420155432272438703"></tg-emoji>',
+    "link": '<tg-emoji emoji-id="5420517437885943844"></tg-emoji>',
+    "trash": '<tg-emoji emoji-id="5422557736330106570"></tg-emoji>',
+    "upload": '<tg-emoji emoji-id="5353001161878182134"></tg-emoji>',
+    "world": '<tg-emoji emoji-id="5336972142066047577"></tg-emoji>',
+    "lock": '<tg-emoji emoji-id="5353022963132174959"></tg-emoji>',
+    "phone": '<tg-emoji emoji-id="5337132498965010628"></tg-emoji>',
+    "num": '<tg-emoji emoji-id="5352862640592949843"></tg-emoji>',
+    "pin": '<tg-emoji emoji-id="5352922460897452503"></tg-emoji>',
+    "star": '<tg-emoji emoji-id="5352552689983067014"></tg-emoji>',
+    "hi": '<tg-emoji emoji-id="5353027129250453493"></tg-emoji>',
+    "bkash": '<tg-emoji emoji-id="6334668932980415143"></tg-emoji>',
+    "nagad": '<tg-emoji emoji-id="6334715949987404568"></tg-emoji>',
+    "binance": '<tg-emoji emoji-id="6334330042880893669"></tg-emoji>',
+    "new_em": '<tg-emoji emoji-id="5382357040008021292">🆕</tg-emoji>',
+    "top_em": '<tg-emoji emoji-id="5415655814079723871">🔝</tg-emoji>',
+    "msg_em": '<tg-emoji emoji-id="6064179391691235813">✉️</tg-emoji>',
+    "srv_em": '<tg-emoji emoji-id="6325653186740756740">👉</tg-emoji>',
+    "lb_head": '<tg-emoji emoji-id="6328103684626456498">📈</tg-emoji>',
+    "lb_1": '<tg-emoji emoji-id="5305763715692377402">1️⃣</tg-emoji>',
+    "lb_2": '<tg-emoji emoji-id="5307907239380528763">2️⃣</tg-emoji>',
+    "lb_3": '<tg-emoji emoji-id="5305783000095537258">3️⃣</tg-emoji>',
+    "lb_4": '<tg-emoji emoji-id="5305255243104138538">4️⃣</tg-emoji>',
+    "lb_5": '<tg-emoji emoji-id="5305288155438526869">5️⃣</tg-emoji>',
+    "lb_6": '<tg-emoji emoji-id="5305642863902604489">6️⃣</tg-emoji>',
+    "lb_7": '<tg-emoji emoji-id="5305603955793867793">7️⃣</tg-emoji>',
+    "lb_8": '<tg-emoji emoji-id="5305371288825509083">8️⃣</tg-emoji>',
+    "lb_9": '<tg-emoji emoji-id="5307703499016910744">9️⃣</tg-emoji>',
+    "lb_10": '<tg-emoji emoji-id="5325605983563558400">😀</tg-emoji>'
 }
 
 RAW_FLAG_EMOJIS = {
@@ -305,880 +332,1647 @@ RAW_FLAG_EMOJIS = {
     "BQ": {"phone_code": "599", "name": "Bonaire", "id": "5780471598922337683"}
 }
 
-def get_user_data(user_id):
-    if user_id not in USER_DATABASE:
-        USER_DATABASE[user_id] = {
-            "balance": 0.0000,
-            "total_paid": 0.0000,
-            "referrals": 0,
-            "otp_received": 0,
-            "wallet": "Not Set"
-        }
-    return USER_DATABASE[user_id]
+def normalize_num(num_str):
+    return re.sub(r'\D', '', str(num_str))
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    get_user_data(user_id)
-    
-    keyboard_layout = {
-        "keyboard": [
-            [
-                {"text": "Get Number", "style": "success", "icon_custom_emoji_id": "5294193228415801857"},
-                {"text": "Search Number", "style": "primary", "icon_custom_emoji_id": "5463352748751753567"}
-            ],
-            [
-                {"text": "Live Traffic", "style": "success", "icon_custom_emoji_id": "6226744728478556191"},
-                {"text": "Withdraw", "style": "danger", "icon_custom_emoji_id": "6190336264940559752"}
-            ],
-            [
-                {"text": "Help", "style": "primary", "icon_custom_emoji_id": "5424905936684736034"}
-            ]
-        ],
-        "resize_keyboard": True,
-        "persistent": True,
-        "placeholder": "Choose an option..."
-    }
-    
-    if user_id in ADMIN_UIDS:
-        keyboard_layout["keyboard"].append([
-            {"text": "🛠️ Admin Panel", "style": "primary", "icon_custom_emoji_id": "5895592588064328942"}
-        ])
+def resolve_country_name_and_code(input_str, sample_number=None):
+    if not input_str and sample_number:
+        clean_num = normalize_num(sample_number)
+        for code, info in sorted(RAW_FLAG_EMOJIS.items(), key=lambda x: len(x[1]["phone_code"]), reverse=True):
+            p_code = info["phone_code"]
+            if p_code != "?" and clean_num.startswith(p_code):
+                return info["name"], code
+        return "Global", "US"
 
-    await update.message.reply_text(
-        text='<tg-emoji emoji-id="5017470156276761427">🔄</tg-emoji> <b>Menu Refreshed Successfully!</b>',
-        reply_markup=json.dumps(keyboard_layout),
-        parse_mode="HTML"
-    )
+    if not input_str:
+        return "Global", "US"
 
-async def send_live_traffic(message_obj, is_edit=False):
-    added_countries = set()
-    for srv, countries in COUNTRY_PRICES.items():
-        for c in countries:
-            added_countries.add((c["code"], c["name"], c.get("id", "5294193228415801857")))
-
-    if not added_countries:
-        no_traffic_msg = "⚠️ <b>No countries added yet in admin panel.</b>"
-        if is_edit:
-            try:
-                await message_obj.edit_text(text=no_traffic_msg, parse_mode="HTML")
-            except Exception:
-                pass
-        else:
-            await message_obj.reply_text(text=no_traffic_msg, parse_mode="HTML")
-        return
-
-    sorted_countries = sorted(list(added_countries), key=lambda x: x[1])
-    top_country_name = sorted_countries[0][1]
-    top_country_id = sorted_countries[0][2]
-
-    traffic_header = (
-        f"<tg-emoji emoji-id='6226744728478556191'>📊</tg-emoji> <b>Live Traffic</b>\n\n"
-        f"📅 Window: Last 5 minutes\n"
-        f"🏆 Results Sent: 100%\n"
-        f"📌 Top Country: <tg-emoji emoji-id='{top_country_id}'>🌐</tg-emoji> {top_country_name}\n\n"
-        f"🌍 <b>Top Countries:</b>"
-    )
-
-    inline_kb = []
-    for idx, (code, name, emoji_id) in enumerate(sorted_countries[:15], 1):
-        percentage = "100.0%" if idx == 1 else "0.0%"
-        btn_text = f"{idx}. {name} — {percentage}"
-        
-        btn = {
-            "text": btn_text,
-            "callback_data": f"traffic_click_{code}",
-            "style": "primary",
-            "icon_custom_emoji_id": emoji_id
-        }
-        inline_kb.append([btn])
-
-    inline_kb.append([
-        {"text": "Refresh", "callback_data": "refresh_traffic", "style": "success", "icon_custom_emoji_id": "5017470156276761427"}
-    ])
-
-    if is_edit:
-        try:
-            await message_obj.edit_text(text=traffic_header, reply_markup=json.dumps({"inline_keyboard": inline_kb}), parse_mode="HTML")
-        except Exception:
-            pass
-    else:
-        await message_obj.reply_text(text=traffic_header, reply_markup=json.dumps({"inline_keyboard": inline_kb}), parse_mode="HTML")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global SERVICES, COUNTRY_PRICES, INBOX_NUMBERS, USER_PREFIXES, USER_NUMBER_INDICES, ADMIN_UIDS, USER_DATABASE
-    if not update.message:
-        return
-        
-    user_id = update.effective_user.id
-    u_data = get_user_data(user_id)
-    state = context.user_data.get("state")
-
-    if text := update.message.text:
-        text = text.strip()
-    else:
-        text = ""
-
-    # --- ADMIN STATES HANDLER ---
-    if user_id in ADMIN_UIDS:
-        if state == "WAITING_BROADCAST_MSG":
-            context.user_data["state"] = None
-            broadcast_count = 0
-            failed_count = 0
-            for uid in list(USER_DATABASE.keys()):
-                try:
-                    await context.bot.copy_message(chat_id=uid, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
-                    broadcast_count += 1
-                except Exception:
-                    failed_count += 1
-            await update.message.reply_text(f"📢 <b>Broadcast Completed!</b>\n\n✅ Sent: <b>{broadcast_count}</b>\n❌ Failed: <b>{failed_count}</b>", parse_mode="HTML")
-            return
-
-        elif state == "WAITING_NEW_ADMIN_ID":
-            context.user_data["state"] = None
-            try:
-                new_admin_id = int(text)
-                ADMIN_UIDS.add(new_admin_id)
-                await update.message.reply_text(f"✅ Success! User ID <code>{new_admin_id}</code> added as Admin.", parse_mode="HTML")
-            except ValueError:
-                await update.message.reply_text("❌ Invalid numeric User ID!")
-            return
-
-        elif state == "WAITING_REMOVE_ADMIN_ID":
-            context.user_data["state"] = None
-            try:
-                rem_admin_id = int(text)
-                if rem_admin_id == ROOT_ADMIN_UID:
-                    await update.message.reply_text("❌ Cannot remove Root Admin!")
-                elif rem_admin_id in ADMIN_UIDS:
-                    ADMIN_UIDS.remove(rem_admin_id)
-                    await update.message.reply_text(f"✅ Success! User ID <code>{rem_admin_id}</code> removed.", parse_mode="HTML")
-                else:
-                    await update.message.reply_text("❌ User ID not found in Admin list.")
-            except ValueError:
-                await update.message.reply_text("❌ Invalid numeric User ID!")
-            return
-
-        elif state == "WAITING_SERV_NAME":
-            service_name = text
-            lower_name = service_name.lower()
-            matched_id = "5911143844304393105"
-            for app_key, info in RAW_APP_EMOJIS.items():
-                if app_key in lower_name:
-                    matched_id = info["id"]
-                    break
-            SERVICES.append({"name": service_name, "id": matched_id})
-            await update.message.reply_text(f"✅ Success! Service <b>{service_name}</b> added.", parse_mode="HTML")
-            context.user_data["state"] = None
-            return
-
-        elif state == "WAITING_COUNTRY_PRICE":
-            try:
-                parts = text.rsplit(" ", 1)
-                country_input = parts[0].strip().upper()
-                c_price = float(parts[1])
-                srv_name = context.user_data.get("target_service")
-
-                matched_code = None
-                for code, info in RAW_FLAG_EMOJIS.items():
-                    if country_input == code or country_input in info["name"].upper():
-                        matched_code = code
-                        break
-
-                if matched_code:
-                    flag_info = RAW_FLAG_EMOJIS[matched_code]
-                    if srv_name not in COUNTRY_PRICES:
-                        COUNTRY_PRICES[srv_name] = []
-                    COUNTRY_PRICES[srv_name].append({
-                        "code": matched_code,
-                        "name": flag_info["name"],
-                        "phone_code": flag_info["phone_code"],
-                        "id": flag_info.get("id", "5911143844304393105"),
-                        "price": c_price
-                    })
-                    await update.message.reply_text(f"✅ Country {flag_info['name']} added to {srv_name} at ${c_price:.4f}/OTP!")
-                else:
-                    await update.message.reply_text("❌ Invalid Country Code or Name!")
-            except Exception:
-                await update.message.reply_text("❌ Invalid format! Use: [Country] [Price]")
-            context.user_data["state"] = None
-            return
-
-        elif state == "WAITING_NUMBER_FILE":
-            if update.message.document:
-                file = await update.message.document.get_file()
-                file_bytes = await file.download_as_bytearray()
-                file_content = file_bytes.decode("utf-8", errors="ignore")
-                
-                lines = [line.strip() for line in file_content.splitlines() if line.strip()]
-                srv_name = context.user_data.get("upload_srv")
-                c_code = context.user_data.get("upload_cnt")
-
-                key = (srv_name, c_code)
-                if key not in INBOX_NUMBERS:
-                    INBOX_NUMBERS[key] = []
-                INBOX_NUMBERS[key].extend(lines)
-
-                await update.message.reply_text(f"✅ Successfully uploaded <b>{len(lines)}</b> numbers for <b>{srv_name}</b> ({c_code})!", parse_mode="HTML")
-            else:
-                await update.message.reply_text("❌ Please upload a valid .txt file.")
-            context.user_data["state"] = None
-            return
-
-    if text == "Live Traffic":
-        await send_live_traffic(update.message, is_edit=False)
-        return
-
-    if state == "WAITING_SEARCH_QUERY":
-        if text:
-            search_query = text
-            context.user_data["state"] = None
-            matching_numbers = []
-            for (srv, cnt), nums in INBOX_NUMBERS.items():
-                for n in nums:
-                    if search_query in n:
-                        formatted_n = f"+{n}" if not n.startswith("+") else n
-                        matching_numbers.append((srv, cnt, formatted_n))
-                        if len(matching_numbers) >= 10:
-                            break
-                if len(matching_numbers) >= 10:
-                    break
-
-            if not matching_numbers:
-                await update.message.reply_text(f"⚠️ <b>No numbers found matching query:</b> <code>{search_query}</code>", parse_mode="HTML")
-                return
-
-            msg_header = f"🔍 <b>Search Results for:</b> <code>{search_query}</code>\n"
-            inline_kb = []
-            for srv, cnt, num in matching_numbers[:10]:
-                c_info = RAW_FLAG_EMOJIS.get(cnt, {"name": cnt, "id": "5911143844304393105"})
-                btn = {
-                    "text": f"[{srv}] {num}",
-                    "copy_text": {"text": num},
-                    "style": "primary",
-                    "icon_custom_emoji_id": c_info.get("id", "5911143844304393105")
-                }
-                inline_kb.append([btn])
-
-            await update.message.reply_text(text=msg_header, reply_markup=json.dumps({"inline_keyboard": inline_kb}), parse_mode="HTML")
-            return
-
-    if state == "WAITING_PREFIX_INPUT":
-        if text:
-            prefix_val = text
-            srv_name = context.user_data.get("current_service")
-            c_code = context.user_data.get("current_country")
+    clean_in = input_str.strip().upper()
+    if clean_in in RAW_FLAG_EMOJIS:
+        return RAW_FLAG_EMOJIS[clean_in]["name"], clean_in
+    for code, info in RAW_FLAG_EMOJIS.items():
+        if info["name"].upper() == clean_in:
+            return info["name"], code
+    for code, info in RAW_FLAG_EMOJIS.items():
+        if clean_in in info["name"].upper():
+            return info["name"], code
             
-            all_nums = INBOX_NUMBERS.get((srv_name, c_code), [])
-            matching_nums = [n for n in all_nums if prefix_val in n]
+    if sample_number:
+        clean_num = normalize_num(sample_number)
+        for code, info in sorted(RAW_FLAG_EMOJIS.items(), key=lambda x: len(x[1]["phone_code"]), reverse=True):
+            p_code = info["phone_code"]
+            if p_code != "?" and clean_num.startswith(p_code):
+                return info["name"], code
 
-            if not matching_nums:
-                if (user_id, srv_name, c_code) in USER_PREFIXES:
-                    del USER_PREFIXES[(user_id, srv_name, c_code)]
-                context.user_data["state"] = None
-                await update.message.reply_text(f"⚠️ <b>No numbers found for prefix:</b> <code>{prefix_val}</code>. Prefix removed.", parse_mode="HTML")
-                await show_country_numbers(update.message, user_id, srv_name, c_code, is_edit=False, is_change=False)
-                return
+    return input_str.capitalize(), "US"
 
-            USER_PREFIXES[(user_id, srv_name, c_code)] = prefix_val
-            USER_NUMBER_INDICES[(user_id, srv_name, c_code)] = 0
-            context.user_data["state"] = None
-            await update.message.reply_text(f"✅ Prefix successfully set to: <code>{prefix_val}</code>", parse_mode="HTML")
-            await show_country_numbers(update.message, user_id, srv_name, c_code, is_edit=False, is_change=False)
-            return
+def get_flag_emoji_tag(country_name):
+    _, code = resolve_country_name_and_code(country_name)
+    if code in RAW_FLAG_EMOJIS:
+        fid = RAW_FLAG_EMOJIS[code]["id"]
+        return f'<tg-emoji emoji-id="{fid}"></tg-emoji>'
+    return PEM["world"]
 
+def get_country_code_prefix(country_name):
+    _, code = resolve_country_name_and_code(country_name)
+    if code in RAW_FLAG_EMOJIS:
+        return RAW_FLAG_EMOJIS[code]["phone_code"]
+    return ""
+
+# =========================================================================
+# --- COMPREHENSIVE MULTI-LANGUAGE DETECTOR ---
+# =========================================================================
+def detect_language_code(text):
     if not text:
-        return
-
-    if state == "WAITING_WALLET":
-        u_data["wallet"] = text
-        context.user_data["state"] = None
-        await update.message.reply_text(f"✅ Success! Your Binance Wallet/UID set to: <code>{text}</code>", parse_mode="HTML")
-        return
-
-    if text == "Withdraw":
-        wallet_text = u_data["wallet"]
-        wallet_display = (wallet_text[:6] + "••••••••" + wallet_text[-6:]) if (wallet_text != "Not Set" and len(wallet_text) > 10) else wallet_text
-
-        wallet_msg = (
-            f"{HTML_EMOJIS['money_bag']} <b>Wallet Center</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{HTML_EMOJIS['user']} User ID: <code>{user_id}</code>\n"
-            f"{HTML_EMOJIS['balance']} Balance: ${u_data['balance']:.4f}\n"
-            f"{HTML_EMOJIS['paid']} Total Paid: ${u_data['total_paid']:.4f}\n"
-            f"{HTML_EMOJIS['referral']} Referrals: {u_data['referrals']}\n"
-            f"{HTML_EMOJIS['otp']} OTP Received: {u_data['otp_received']}\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{HTML_EMOJIS['warn']} Minimum Withdraw: $0.0200\n"
-            f"{HTML_EMOJIS['fee']} Network Fee: 0%\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"{HTML_EMOJIS['card']} Method: <b>BINANCE</b>\n"
-            f"{HTML_EMOJIS['address']} Address: <code>{wallet_display}</code>"
-        )
-
-        wallet_kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "Set Wallet", "callback_data": "set_wallet", "style": "primary", "icon_custom_emoji_id": "5776103539872896061"},
-                    {"text": "Withdraw", "callback_data": "request_withdraw", "style": "danger", "icon_custom_emoji_id": "5352694861990501856"}
-                ]
-            ]
-        }
-        await update.message.reply_text(text=wallet_msg, reply_markup=json.dumps(wallet_kb), parse_mode="HTML")
-
-    elif text == "Get Number":
-        if not SERVICES:
-            await update.message.reply_text(text="⚠️ Ekhono kono service add kora hoyni.")
-            return
-
-        inline_keyboard = []
-        row = []
-        for service in SERVICES:
-            s_name = service["name"]
-            s_id = service["id"]
-            btn = {
-                "text": s_name,
-                "callback_data": f"get_srv_{s_name}",
-                "style": "primary",
-                "icon_custom_emoji_id": s_id
-            }
-            row.append(btn)
-            if len(row) == 2:
-                inline_keyboard.append(row)
-                row = []
-        if row:
-            inline_keyboard.append(row)
-
-        await update.message.reply_text(text="Select a service below:", reply_markup=json.dumps({"inline_keyboard": inline_keyboard}))
-
-    elif text == "Search Number":
-        context.user_data["state"] = "WAITING_SEARCH_QUERY"
-        await update.message.reply_text(text="🔍 <b>Send number prefix to search (e.g. 234809):</b>", parse_mode="HTML")
-
-    elif text == "Help":
-        help_text = (
-            "ℹ️ <b>Help</b>\n\n"
-            "• 📥 <b>Get Number</b> — get a new DID\n"
-            "• 🔎 <b>Search Number</b> — search fresh numbers by prefix\n"
-            "• 📟 <b>Live Traffic</b> — view last 5 minutes SMS traffic\n"
-            "• 🔄 <b>Change Number</b> — get the next number from the same country\n"
-            "• ✨ <b>Set Prefix</b> — get numbers with a specific prefix\n"
-            "• 💸 <b>Withdraw</b> — send a payout request"
-        )
-        await update.message.reply_text(text=help_text, parse_mode="HTML")
-
-    elif text == "🛠️ Admin Panel" and user_id in ADMIN_UIDS:
-        admin_inline_kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "Add Service", "callback_data": "btn_add_service", "style": "success"},
-                    {"text": "Del Service", "callback_data": "btn_del_service_start", "style": "danger"}
-                ],
-                [
-                    {"text": "Add Country", "callback_data": "btn_add_country_start", "style": "primary"},
-                    {"text": "Del Country", "callback_data": "btn_del_country_start", "style": "danger"}
-                ],
-                [
-                    {"text": "Upload Numbers", "callback_data": "btn_upload_num_start", "style": "success"}
-                ],
-                [
-                    {"text": "Add Admin", "callback_data": "btn_add_admin", "style": "success"},
-                    {"text": "Remove Admin", "callback_data": "btn_remove_admin", "style": "danger"}
-                ],
-                [
-                    {"text": "📢 Broadcast", "callback_data": "btn_broadcast_start", "style": "primary"}
-                ]
-            ]
-        }
-        await update.message.reply_text(text="🛠️ Admin Panel Control Center:", reply_markup=json.dumps(admin_inline_kb))
-
-async def show_country_numbers(message_obj, user_id, srv_name, c_code, is_edit=False, is_change=True):
-    global USER_NUMBER_INDICES
-    srv_emoji_id = "5911143844304393105"
-    for s in SERVICES:
-        if s["name"] == srv_name:
-            srv_emoji_id = s["id"]
-            break
-
-    c_info = RAW_FLAG_EMOJIS.get(c_code, {"name": c_code, "phone_code": "000", "id": "5911143844304393105"})
-    all_nums = INBOX_NUMBERS.get((srv_name, c_code), ["2348090240384", "2348090241305", "2348090241791"])
-
-    user_prefix = USER_PREFIXES.get((user_id, srv_name, c_code))
-    if user_prefix:
-        filtered_nums = [n for n in all_nums if user_prefix in n]
-        if not filtered_nums:
-            del USER_PREFIXES[(user_id, srv_name, c_code)]
-            nums = [f"+{n}" if not n.startswith("+") else n for n in all_nums]
-        else:
-            nums = [f"+{n}" if not n.startswith("+") else n for n in filtered_nums]
-    else:
-        nums = [f"+{n}" if not n.startswith("+") else n for n in all_nums]
-
-    if not nums:
-        no_num_msg = "⚠️ <b>No numbers available.</b>"
-        if is_edit:
-            try:
-                await message_obj.edit_text(text=no_num_msg, parse_mode="HTML")
-            except Exception:
-                pass
-        else:
-            await message_obj.reply_text(text=no_num_msg, parse_mode="HTML")
-        return
-
-    key = (user_id, srv_name, c_code)
-    current_idx = USER_NUMBER_INDICES.get(key, 0)
+        return "Global", "INT"
+    lower_t = text.lower()
     
-    if is_change:
-        current_idx = (current_idx + 3) % len(nums)
-        USER_NUMBER_INDICES[key] = current_idx
+    if any(0x1200 <= ord(char) <= 0x137F for char in text):
+        return "Amharic", "AM"
+    if any(0x0980 <= ord(char) <= 0x09FF for char in text):
+        return "Bengali", "BD"
+    if any(c in lower_t for c in ['ê', 'î', 'û', 'ç', 'ş', 'ẍ', 'ḧ', 'ڤ', 'چ', 'پ', 'گ', 'ژ', 'kurmancî', 'سۆرانی', 'badînî', 'zazaki']):
+        return "Kurdish", "KU"
+    if any(ord(char) >= 0x4e00 and ord(char) <= 0x9fa5 for char in text):
+        return "Chinese", "CN"
+    elif any(ord(char) >= 0x0400 and ord(char) <= 0x04FF for char in text):
+        if any(w in lower_t for w in ['български', 'област', 'код']):
+            return "Bulgarian", "BG"
+        elif any(w in lower_t for w in ['македонски', 'јазик']):
+            return "Macedonian", "MK"
+        elif any(w in lower_t for w in ['українська', 'мова']):
+            return "Ukrainian", "UA"
+        elif any(w in lower_t for w in ['қазақ', 'тілі']):
+            return "Kazakh", "KZ"
+        elif any(w in lower_t for w in ['кыргыз']):
+            return "Kyrgyz", "KG"
+        elif any(w in lower_t for w in ['тоҷикӣ']):
+            return "Tajik", "TJ"
+        elif any(w in lower_t for w in ['монгол']):
+            return "Mongolian", "MN"
+        elif any(w in lower_t for w in ['српски']):
+            return "Serbian", "RS"
+        return "Russian", "RU"
+    elif any(ord(char) >= 0x10A0 and ord(char) <= 0x10FF for char in text):
+        return "Georgian", "GE"
+    elif any(ord(char) >= 0x0600 and ord(char) <= 0x06FF for char in text):
+        if any(w in lower_t for w in ['فارسی', 'زبان فارسی']):
+            return "Persian", "IR"
+        elif any(w in lower_t for w in ['اردو']):
+            return "Urdu", "UR"
+        elif any(w in lower_t for w in ['oʻzbek', 'ўзбек', 'o‘zbek']):
+            return "Uzbek", "UZ"
+        return "Arabic", "AR"
+    elif any(ord(char) >= 0x0370 and ord(char) <= 0x03FF for char in text):
+        return "Greek", "GR"
+    elif any(ord(char) >= 0x0590 and ord(char) <= 0x05FF for char in text):
+        return "Hebrew", "HE"
+    elif any(ord(char) >= 0x0900 and ord(char) <= 0x097F for char in text):
+        return "Hindi", "HI"
+    elif any(ord(char) >= 0x0A80 and ord(char) <= 0x0AFF for char in text):
+        return "Gujarati", "GU"
+    elif any(ord(char) >= 0x0B80 and ord(char) <= 0x0BFF for char in text):
+        return "Tamil", "TA"
+    elif any(ord(char) >= 0x0D80 and ord(char) <= 0x0DFF for char in text):
+        return "Sinhala", "SI"
+    elif any(ord(char) >= 0x0E00 and ord(char) <= 0x0E7F for char in text):
+        if any(w in lower_t for w in ['ລາວ', 'ภาษาลาว']):
+            return "Lao", "LO"
+        return "Thai", "TH"
+    elif any(ord(char) >= 0x1780 and ord(char) <= 0x17FF for char in text):
+        return "Khmer", "KM"
+    elif any(ord(char) >= 0x1000 and ord(char) <= 0x109F for char in text):
+        return "Burmese", "MY"
+    elif any( (0x3040 <= ord(char) <= 0x309F) or (0x30A0 <= ord(char) <= 0x30FF) for char in text):
+        return "Japanese", "JP"
+    elif any(0xAC00 <= ord(char) <= 0xD7A3 for char in text):
+        return "Korean", "KR"
 
-    displayed_nums = []
-    for i in range(min(3, len(nums))):
-        idx = (current_idx + i) % len(nums)
-        displayed_nums.append(nums[idx])
+    if any(w in lower_t for w in ['af soomaali']):
+        return "Somali", "SO"
+    elif any(w in lower_t for w in ['kiswahili']):
+        return "Swahili", "SW"
+    elif any(w in lower_t for w in ['lingála']):
+        return "Lingala", "LN"
+    elif any(w in lower_t for w in ['code de verification', 'vérification', 'compte', 'connexion', 'veuillez', 'identifiants', 'succ', 'français', 'kreyòl']):
+        return "French", "FR"
+    elif any(w in lower_t for w in ['deutsch', 'bestätigungscode', 'passwort', 'anmelden']):
+        return "German", "DE"
+    elif any(w in lower_t for w in ['język polski', 'kod weryfikacyjny', 'konto', 'hasło', 'polski']):
+        return "Polish", "PL"
+    elif any(w in lower_t for w in ['limba română', 'cod de verificare', 'cont', 'autentificare', 'română']):
+        return "Romanian", "RO"
+    elif any(w in lower_t for w in ['český jazyk', 'ověřovací kód', 'účet', 'přihlásit', 'český', 'bosanski']):
+        return "Czech", "CZ"
+    elif any(w in lower_t for w in ['svenska', 'verifieringskod', 'konto', 'logga in']):
+        return "Swedish", "SE"
+    elif any(w in lower_t for w in ['italiano', 'codice di verifica', 'accesso', 'account']):
+        return "Italian", "IT"
+    elif any(w in lower_t for w in ['español', 'código de verificación', 'cuenta', 'ingresar', 'mexicano']):
+        return "Spanish", "ES"
+    elif any(w in lower_t for w in ['türk dili', 'türkçe', 'doğrulama kodu', 'hesap', 'giriş', 'zazaki']):
+        return "Turkish", "TR"
+    elif any(w in lower_t for w in ['slovenský jazyk', 'overovací kód', 'účet', 'slovenčin']):
+        return "Slovak", "SK"
+    elif any(w in lower_t for w in ['slovenščina']):
+        return "Slovenian", "SL"
+    elif any(w in lower_t for w in ['língua portuguesa', 'português', 'código de verificação', 'conta', 'brasil']):
+        return "Portuguese", "PT"
+    elif any(w in lower_t for w in ['dansk', 'bekræftelseskode', 'konto']):
+        return "Danish", "DK"
+    elif any(w in lower_t for w in ['eesti', 'kinnituskood', 'konto', 'eesti keel']):
+        return "Estonian", "EE"
+    elif any(w in lower_t for w in ['suomi', 'vahvistuskoodi', 'tili']):
+        return "Finnish", "FI"
+    elif any(w in lower_t for w in ['hrvatski jezik', 'verifikacijski kod', 'račun', 'hrvatski']):
+        return "Croatian", "HR"
+    elif any(w in lower_t for w in ['magyar', 'ellenőrző kód', 'fiók', 'magyar nyelv']):
+        return "Hungarian", "HU"
+    elif any(w in lower_t for w in ['indonesia', 'bahasa indonesia', 'kode', 'verifikasi', 'masuk', 'kata', 'rahasia', 'akun']):
+        return "Indonesian", "ID"
+    elif any(w in lower_t for w in ['melayu', 'bahasa melayu']):
+        return "Malay", "MS"
+    elif any(w in lower_t for w in ['filipino', 'tagalog']):
+        return "Filipino", "PH"
+    elif any(w in lower_t for w in ['tiếng việt']):
+        return "Vietnamese", "VI"
+    elif any(w in lower_t for w in ['norsk']):
+        return "Norwegian", "NB"
+    elif any(w in lower_t for w in ['lietuvių', 'lietuvių kalba']):
+        return "Lithuanian", "LT"
+    elif any(w in lower_t for w in ['latviešu']):
+        return "Latvian", "LV"
+    elif any(w in lower_t for w in ['shqip']):
+        return "Albanian", "AL"
+    elif any(w in lower_t for w in ['íslenska']):
+        return "Icelandic", "IS"
+    elif any(w in lower_t for w in ['code', 'verification', 'password', 'login', 'security', 'pin']):
+        return "English", "EN"
 
-    for num in displayed_nums:
-        clean_num = num.replace("+", "").strip()
-        ACTIVE_NUMBER_ALLOCATIONS[clean_num] = user_id
+    return "Global", "INT"
 
-    msg_header = (
-        "🔄 <b>These numbers are activated and ready to receive SMS.</b>\n\n"
-        f"<tg-emoji emoji-id='{srv_emoji_id}'>💬</tg-emoji> Service: <b>{srv_name}</b>\n"
-        f"<tg-emoji emoji-id='{c_info.get('id', '5911143844304393105')}'>✈️</tg-emoji> Country: {c_info['name']} (+{c_info['phone_code']})"
-    )
+# =========================================================================
+# --- LOCAL JSON DATABASE CONFIGURATION ---
+# =========================================================================
+DB_FILE = "local_database.json"
 
-    inline_kb = []
-    for num in displayed_nums:
-        btn = {
-            "text": f"{num}",
-            "copy_text": {"text": num},
-            "style": "primary",
-            "icon_custom_emoji_id": c_info.get('id', '5911143844304393105')
-        }
-        inline_kb.append([btn])
-
-    inline_kb.append([
-        {"text": "Change Country", "callback_data": f"get_srv_{srv_name}", "style": "primary", "icon_custom_emoji_id": "6327661629412482207"},
-        {"text": "Set Prefix", "callback_data": f"open_prefix_{srv_name}_{c_code}", "style": "success", "icon_custom_emoji_id": "5463352748751753567"}
-    ])
-    inline_kb.append([
-        {"text": "Change Number", "callback_data": f"select_country_{srv_name}_{c_code}", "style": "primary", "icon_custom_emoji_id": "5017470156276761427"}
-    ])
-    inline_kb.append([
-        {"text": "OTP Group", "url": "https://t.me/PakistanOTPCommunity", "style": "primary", "icon_custom_emoji_id": "6325738755374194174"}
-    ])
-
-    if is_edit:
+def load_local_db():
+    if os.path.exists(DB_FILE):
         try:
-            await message_obj.edit_text(text=msg_header, reply_markup=json.dumps({"inline_keyboard": inline_kb}), parse_mode="HTML")
-        except Exception:
-            pass
-    else:
-        await message_obj.reply_text(text=msg_header, reply_markup=json.dumps({"inline_keyboard": inline_kb}), parse_mode="HTML")
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global SERVICES, COUNTRY_PRICES, INBOX_NUMBERS, USER_PREFIXES, USER_NUMBER_INDICES, ADMIN_UIDS
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = update.effective_user.id
-    u_data = get_user_data(user_id)
-
-    if data == "refresh_traffic":
-        await send_live_traffic(query.message, is_edit=True)
-        await query.answer(text="Live Traffic Refreshed!", show_alert=False)
-        return
-
-    if data == "set_wallet":
-        context.user_data["state"] = "WAITING_WALLET"
-        await query.message.reply_text("💳 Please send your Binance UID or Wallet Address:")
-
-    elif data == "request_withdraw":
-        if u_data["wallet"] == "Not Set":
-            await query.message.reply_text("❌ Please set your Binance wallet first using the 'Set Wallet' button.")
-            return
-        if u_data["balance"] < 0.0200:
-            await query.message.reply_text("❌ Insufficient balance! Minimum withdraw is $0.0200.")
-            return
-
-        admin_msg = f"🚨 <b>New Withdraw Request!</b>\n\n👤 User ID: <code>{user_id}</code>\n💵 Amount: ${u_data['balance']:.4f}\n💳 Binance: <code>{u_data['wallet']}</code>"
-        for adm in ADMIN_UIDS:
-            try:
-                await context.bot.send_message(chat_id=adm, text=admin_msg, parse_mode="HTML")
-            except:
-                pass
-        await query.message.reply_text("✅ Withdraw request submitted successfully!")
-
-    elif user_id in ADMIN_UIDS and data == "btn_add_service":
-        context.user_data["state"] = "WAITING_SERV_NAME"
-        await query.message.reply_text(text="📦 Enter new service name:")
-
-    elif user_id in ADMIN_UIDS and data == "btn_del_service_start":
-        if not SERVICES:
-            await query.message.reply_text("⚠️ No services to delete.")
-            return
-        kb = [[{"text": f"❌ {s['name']}", "callback_data": f"admin_delsrv_{s['name']}", "style": "danger"}] for s in SERVICES]
-        await query.message.reply_text("🗑️ Select service to delete:", reply_markup=json.dumps({"inline_keyboard": kb}))
-
-    elif user_id in ADMIN_UIDS and data.startswith("admin_delsrv_"):
-        srv_name = data.replace("admin_delsrv_", "")
-        SERVICES = [s for s in SERVICES if s["name"] != srv_name]
-        if srv_name in COUNTRY_PRICES:
-            del COUNTRY_PRICES[srv_name]
-        await query.message.reply_text(f"✅ Service <b>{srv_name}</b> deleted!", parse_mode="HTML")
-
-    elif user_id in ADMIN_UIDS and data == "btn_add_country_start":
-        if not SERVICES:
-            await query.message.reply_text("⚠️ Add service first.")
-            return
-        kb = [[{"text": s["name"], "callback_data": f"admin_selsrv_{s['name']}", "style": "primary"}] for s in SERVICES]
-        await query.message.reply_text("📦 Select service for country:", reply_markup=json.dumps({"inline_keyboard": kb}))
-
-    elif user_id in ADMIN_UIDS and data.startswith("admin_selsrv_"):
-        srv_name = data.replace("admin_selsrv_", "")
-        context.user_data["target_service"] = srv_name
-        context.user_data["state"] = "WAITING_COUNTRY_PRICE"
-        await query.message.reply_text(f"🌍 Send format: <code>[CountryName/Code] [Price]</code>", parse_mode="HTML")
-
-    elif user_id in ADMIN_UIDS and data == "btn_del_country_start":
-        if not COUNTRY_PRICES:
-            await query.message.reply_text("⚠️ No countries available to delete.")
-            return
-        kb = []
-        for srv, countries in COUNTRY_PRICES.items():
-            for c in countries:
-                kb.append([{
-                    "text": f"❌ {srv} - {c['name']}",
-                    "callback_data": f"admin_delcnt_{srv}_{c['code']}",
-                    "style": "danger"
-                }])
-        await query.message.reply_text("🗑️ Select country to delete:", reply_markup=json.dumps({"inline_keyboard": kb}))
-
-    elif user_id in ADMIN_UIDS and data.startswith("admin_delcnt_"):
-        parts = data.replace("admin_delcnt_", "").split("_", 1)
-        srv_name = parts[0]
-        c_code = parts[1]
-        if srv_name in COUNTRY_PRICES:
-            COUNTRY_PRICES[srv_name] = [c for c in COUNTRY_PRICES[srv_name] if c["code"] != c_code]
-        await query.message.reply_text(f"✅ Country code <b>{c_code}</b> removed from <b>{srv_name}</b> successfully!", parse_mode="HTML")
-
-    elif user_id in ADMIN_UIDS and data == "btn_upload_num_start":
-        if not SERVICES:
-            await query.message.reply_text("⚠️ No service available.")
-            return
-        kb = [[{"text": s["name"], "callback_data": f"upld_srv_{s['name']}", "style": "success"}] for s in SERVICES]
-        await query.message.reply_text("📁 Select service to upload numbers:", reply_markup=json.dumps({"inline_keyboard": kb}))
-
-    elif user_id in ADMIN_UIDS and data.startswith("upld_srv_"):
-        srv_name = data.replace("upld_srv_", "")
-        countries = COUNTRY_PRICES.get(srv_name, [])
-        if not countries:
-            await query.message.reply_text(f"⚠️ No countries in <b>{srv_name}</b>.", parse_mode="HTML")
-            return
-        context.user_data["upload_srv"] = srv_name
-        kb = [[{"text": c["name"], "callback_data": f"upld_cnt_{srv_name}_{c['code']}", "style": "primary"}] for c in countries]
-        await query.message.reply_text(f"📁 Select country for <b>{srv_name}</b>:", reply_markup=json.dumps({"inline_keyboard": kb}), parse_mode="HTML")
-
-    elif user_id in ADMIN_UIDS and data.startswith("upld_cnt_"):
-        parts = data.replace("upld_cnt_", "").split("_", 1)
-        context.user_data["upload_srv"] = parts[0]
-        context.user_data["upload_cnt"] = parts[1]
-        context.user_data["state"] = "WAITING_NUMBER_FILE"
-        await query.message.reply_text(f"📁 Now upload the <b>.txt file</b> for numbers.", parse_mode="HTML")
-
-    elif user_id == ROOT_ADMIN_UID and data == "btn_add_admin":
-        context.user_data["state"] = "WAITING_NEW_ADMIN_ID"
-        await query.message.reply_text("➕ Please send the Telegram User ID of the new Admin:")
-
-    elif user_id == ROOT_ADMIN_UID and data == "btn_remove_admin":
-        context.user_data["state"] = "WAITING_REMOVE_ADMIN_ID"
-        admin_list_str = ", ".join([str(uid) for uid in ADMIN_UIDS if uid != ROOT_ADMIN_UID]) or "None"
-        await query.message.reply_text(f"❌ Current Admins: {admin_list_str}\n\nPlease send the Telegram User ID to remove from Admins:")
-
-    elif user_id in ADMIN_UIDS and data == "btn_broadcast_start":
-        context.user_data["state"] = "WAITING_BROADCAST_MSG"
-        await query.message.reply_text(
-            "📢 <tg-emoji emoji-id='5334590977837403844'>📤</tg-emoji> <b>Send the broadcast message, photo, or video now:</b>",
-            parse_mode="HTML"
-        )
-
-    elif data.startswith("get_srv_"):
-        srv_name = data.replace("get_srv_", "")
-        countries = COUNTRY_PRICES.get(srv_name, [])
-        if not countries:
-            await query.message.reply_text(text=f"⚠️ No countries found for <b>{srv_name}</b>.", parse_mode="HTML")
-            return
-
-        inline_kb = []
-        for idx, c in enumerate(countries):
-            btn_text = f"{c['name']} (+{c['phone_code']}) | ${c['price']:.4f}/OTP"
-            btn_style = "success" if idx % 2 == 0 else "primary"
-            btn = {
-                "text": btn_text,
-                "callback_data": f"select_country_{srv_name}_{c['code']}",
-                "style": btn_style,
-                "icon_custom_emoji_id": c.get("id", "5911143844304393105")
-            }
-            inline_kb.append([btn])
-        inline_kb.append([{"text": "Back To Services", "callback_data": "back_to_services", "style": "success"}])
-
-        try:
-            await query.message.edit_text(text="Available countries:", reply_markup=json.dumps({"inline_keyboard": inline_kb}))
-        except Exception:
-            pass
-
-    elif data.startswith("select_country_"):
-        parts = data.replace("select_country_", "").split("_", 1)
-        srv_name = parts[0]
-        c_code = parts[1]
-        await show_country_numbers(query.message, user_id, srv_name, c_code, is_edit=True, is_change=True)
-
-    elif data.startswith("open_prefix_"):
-        parts = data.replace("open_prefix_", "").split("_", 1)
-        srv_name = parts[0]
-        c_code = parts[1]
-        
-        current_p = USER_PREFIXES.get((user_id, srv_name, c_code))
-
-        if not current_p:
-            context.user_data["state"] = "WAITING_PREFIX_INPUT"
-            context.user_data["current_service"] = srv_name
-            context.user_data["current_country"] = c_code
-            await query.message.reply_text(
-                text="✏️ <b>Send prefix (5/6/7 digits).</b>\nExample: <code>15501</code> or <code>2376205</code>",
-                parse_mode="HTML"
-            )
-        else:
-            prefix_msg = f"✅ <b>Prefix already set:</b> <code>{current_p}</code>\nChoose:"
-            prefix_kb = {
-                "inline_keyboard": [
-                    [
-                        {"text": "Change Prefix", "callback_data": f"chg_prefix_{srv_name}_{c_code}", "style": "primary"},
-                        {"text": "Clear Prefix", "callback_data": f"clr_prefix_{srv_name}_{c_code}", "style": "danger"}
-                    ],
-                    [
-                        {"text": "Cancel", "callback_data": f"select_country_{srv_name}_{c_code}", "style": "primary"}
-                    ]
-                ]
-            }
-            try:
-                await query.message.edit_text(text=prefix_msg, reply_markup=json.dumps(prefix_kb), parse_mode="HTML")
-            except Exception:
-                pass
-
-    elif data.startswith("chg_prefix_"):
-        parts = data.replace("chg_prefix_", "").split("_", 1)
-        context.user_data["state"] = "WAITING_PREFIX_INPUT"
-        context.user_data["current_service"] = parts[0]
-        context.user_data["current_country"] = parts[1]
-        await query.message.reply_text(
-            text="✏️ <b>Send new prefix (5/6/7 digits):</b>",
-            parse_mode="HTML"
-        )
-
-    elif data.startswith("clr_prefix_"):
-        parts = data.replace("clr_prefix_", "").split("_", 1)
-        srv_name = parts[0]
-        c_code = parts[1]
-        
-        if (user_id, srv_name, c_code) in USER_PREFIXES:
-            del USER_PREFIXES[(user_id, srv_name, c_code)]
-        if (user_id, srv_name, c_code) in USER_NUMBER_INDICES:
-            del USER_NUMBER_INDICES[(user_id, srv_name, c_code)]
-        
-        await query.answer(text="Prefix cleared successfully!", show_alert=True)
-        await show_country_numbers(query.message, user_id, srv_name, c_code, is_edit=True, is_change=False)
-
-    elif data == "back_to_services":
-        if not SERVICES:
-            await query.message.edit_text(text="⚠️ No services available.")
-            return
-
-        inline_keyboard = []
-        row = []
-        for service in SERVICES:
-            s_name = service["name"]
-            s_id = service["id"]
-            btn = {
-                "text": s_name,
-                "callback_data": f"get_srv_{s_name}",
-                "style": "primary",
-                "icon_custom_emoji_id": s_id
-            }
-            row.append(btn)
-            if len(row) == 2:
-                inline_keyboard.append(row)
-                row = []
-        if row:
-            inline_keyboard.append(row)
-
-        try:
-            await query.message.edit_text(text="Select a service below:", reply_markup=json.dumps({"inline_keyboard": inline_keyboard}))
-        except Exception:
-            pass
-
-def detect_service_country_and_language(full_msg, number):
-    service_name = "SMS"
-    service_id = "5911143844304393105"
-    
-    lower_msg = full_msg.lower()
-    for srv_key, info in RAW_APP_EMOJIS.items():
-        if srv_key in lower_msg:
-            service_name = srv_key.capitalize()
-            service_id = info["id"]
-            break
-
-    clean_num = number.replace("+", "").strip()
-    country_code = "US"
-    country_info = RAW_FLAG_EMOJIS["US"]
-    
-    sorted_countries = sorted(RAW_FLAG_EMOJIS.items(), key=lambda x: len(x[1]["phone_code"]), reverse=True)
-    for code, info in sorted_countries:
-        p_code = info["phone_code"]
-        if p_code != "?" and clean_num.startswith(p_code):
-            country_code = code
-            country_info = info
-            break
-
-    prefix_val = clean_num[:6] if len(clean_num) >= 6 else clean_num
-
-    lang_name = "English"
-    if any(c in full_msg for c in "ěščřžýáíéúůťďňĚŠČŘŽÝÁÍÉÚŮŤĎŇ"):
-        lang_name = "Czech"
-    elif any(c in full_msg for c in "àâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ"):
-        lang_name = "French"
-    elif any(c in full_msg for c in "äöüßÄÖÜ"):
-        lang_name = "German"
-    elif any(c in full_msg for c in "ñÑáéíóúÁÉÍÓÚ"):
-        lang_name = "Spanish"
-    elif any(c in full_msg for c in "абвгдежзийклмнопрстуфхцчшщъыьэюяАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"):
-        lang_name = "Russian"
-
-    return service_name, service_id, country_code, country_info, prefix_val, lang_name
-
-async def webhook_handler(request):
-    try:
-        if request.can_read_body:
-            data = await request.json()
-        else:
-            data = {}
-    except Exception:
-        data = {}
-
-    params = dict(request.query)
-    params.update(data)
-
-    number = params.get("number") or params.get("called_number", "")
-    number = number.strip().replace("+", "")
-    if "{{" in number or "}}" in number or not number:
-        number = "22898880555"
-
-    full_msg = params.get("full_msg") or params.get("smstext", "N/A")
-    if "{{" in full_msg or "}}" in full_msg or not full_msg:
-        full_msg = "[TikTok] 236368 je váš ověřovací kód"
-
-    otp_match = re.search(r'\b\d{3}[- ]?\d{3}\b|\b\d{4,6}\b', full_msg)
-    otp_code = otp_match.group(0) if otp_match else "N/A"
-
-    service_name, srv_emoji_id, country_code, c_info, prefix_val, lang_name = detect_service_country_and_language(full_msg, number)
-
-    bot_app = request.app['bot_application']
-
-    target_user_id = ACTIVE_NUMBER_ALLOCATIONS.get(number)
-    if target_user_id:
-        user_msg = (
-            "📧 <tg-emoji emoji-id='5431551436502611633'>📬</tg-emoji> <b>New DID Received!</b>\n"
-            f"Number: <code>+{number}</code>\n"
-            f"Service: <tg-emoji emoji-id='{srv_emoji_id}'>💬</tg-emoji> {service_name}\n"
-            f"OTP: <code>{otp_code}</code>\n"
-            f"Status: Paid: 0.000000"
-        )
-        user_kb = {
-            "inline_keyboard": [
-                [
-                    {"text": "Full Msg", "copy_text": {"text": full_msg}, "style": "primary", "icon_custom_emoji_id": "5348469219761626211"}
-                ]
-            ]
-        }
-        try:
-            await bot_app.bot.send_message(
-                chat_id=target_user_id,
-                text=user_msg,
-                reply_markup=json.dumps(user_kb),
-                parse_mode="HTML"
-            )
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content:
+                    raise ValueError("Empty DB file")
+                return json.loads(content)
         except Exception as e:
-            logging.error(f"Failed to send webhook message: {e}")
-
-    group_msg = (
-        f"Container\n"
-        f"<tg-emoji emoji-id='{c_info['id']}'>🌐</tg-emoji> #{country_code} <tg-emoji emoji-id='{srv_emoji_id}'>💬</tg-emoji> {number} #{lang_name}\n"
-        f"➡️ Prefix: {prefix_val}"
-    )
-    group_kb = {
-        "inline_keyboard": [
-            [
-                {
-                    "text": f"{otp_code}", 
-                    "copy_text": {"text": otp_code}, 
-                    "style": "primary", 
-                    "icon_custom_emoji_id": "5411184095994601436"
-                },
-                {
-                    "text": "Full Msg", 
-                    "copy_text": {"text": full_msg}, 
-                    "style": "primary", 
-                    "icon_custom_emoji_id": "6064179391691235813"
-                }
-            ],
-            [
-                {
-                    "text": "🤖 ATC Bot", 
-                    "url": "https://t.me/urbannumber_bot", 
-                    "style": "success", 
-                    "icon_custom_emoji_id": srv_emoji_id
-                }
-            ]
-        ]
+            logger.error(f"Error loading local DB: {e}")
+    return {
+        "users": {},
+        "assignments": {},
+        "withdrawals": {},
+        "stock": {},
+        "settings": {
+            'otp_rate': '1.0',
+            'min_withdraw': '1000',
+            'global_cc_limit': '3',
+            'usd_rate': '126.0',
+            'auto_ban_status': 'on'
+        },
+        "country_rates": {},
+        "country_limits": {},
+        "processed_messages": {}
     }
+
+def save_local_db():
     try:
-        await bot_app.bot.send_message(
-            chat_id=OTP_GROUP_CHAT_ID,
-            text=group_msg,
-            reply_markup=json.dumps(group_kb),
-            parse_mode="HTML"
-        )
+        data = {
+            "users": CACHE_USERS,
+            "assignments": CACHE_ASSIGNMENTS,
+            "withdrawals": CACHE_WITHDRAWALS,
+            "stock": CACHE_STOCK,
+            "settings": CACHE_SETTINGS,
+            "country_rates": CACHE_RATES,
+            "country_limits": CACHE_LIMITS,
+            "processed_messages": CACHE_PROCESSED
+        }
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        logging.error(f"Failed to send group message: {e}")
+        logger.error(f"Error saving local DB: {e}")
 
-    return web.Response(text="Postback processed successfully", status=200)
+db_data = load_local_db()
 
-async def run_web_server(application):
-    app = web.Application()
-    app['bot_application'] = application
-    app.router.add_post('/webhook', webhook_handler)
-    app.router.add_get('/webhook', webhook_handler)
+CACHE_USERS = db_data.get("users", {})
+CACHE_STOCK = db_data.get("stock", {})
+CACHE_ASSIGNMENTS = db_data.get("assignments", {})
+CACHE_SETTINGS = db_data.get("settings", {})
+CACHE_RATES = db_data.get("country_rates", {})
+CACHE_LIMITS = db_data.get("country_limits", {})
+CACHE_PROCESSED = db_data.get("processed_messages", {})
+CACHE_WITHDRAWALS = db_data.get("withdrawals", {})
+USER_COOLDOWN = {}
+USER_CC_TOGGLE = {} 
+USER_FETCH_COUNT = {}
+
+otp_process_lock = asyncio.Lock()
+
+# =========================================================================
+# --- BOT CONFIGURATION & GLOBAL SETTINGS ---
+# =========================================================================
+ADMIN_IDS = [6138186135,6726432804]
+SUPER_ADMIN_ID = 6138186135 
+TOKEN = "8893865416:AAH_jNom_9VbGkJZKkDsy3qNFEaYd-bvBzk" 
+TARGET_GROUP_IDS = [-1003783166578] 
+WEBHOOK_PORT = 8080
+
+http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(20.0, connect=5.0, read=15.0), 
+    limits=httpx.Limits(max_connections=500, max_keepalive_connections=100),
+    headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*"
+    }
+)
+
+def init_default_settings():
+    defaults = {
+        'otp_rate': '1.0',
+        'min_withdraw': '1000',
+        'global_cc_limit': '3',
+        'usd_rate': '126.0',
+        'auto_ban_status': 'on'
+    }
+    for k, v in defaults.items():
+        if k not in CACHE_SETTINGS:
+            CACHE_SETTINGS[k] = v
+    save_local_db()
+
+init_default_settings()
+
+# =========================================================================
+# --- CORE UTILITY HELPERS ---
+# =========================================================================
+async def get_config_val(key, default):
+    return str(CACHE_SETTINGS.get(key, default))
+
+async def set_config_val(key, value):
+    CACHE_SETTINGS[key] = str(value)
+    save_local_db()
+
+def mask_username(name):
+    if not name or name == "N/A": return "N/A"
+    length = len(name)
+    hide_len = max(1, int(length * 0.7))
+    return name[:length - hide_len] + "..."
+
+def mask_user_id(uid_str):
+    if not uid_str: return "N/A"
+    s_uid = str(uid_str)
+    length = len(s_uid)
+    hide_len = max(1, int(length * 0.7))
+    return s_uid[:length - hide_len] + "..."
+
+async def get_country_payout(country_name):
+    resolved_name, _ = resolve_country_name_and_code(country_name)
+    if resolved_name in CACHE_RATES:
+        return float(CACHE_RATES[resolved_name])
+    if country_name in CACHE_RATES:
+        return float(CACHE_RATES[country_name])
+    default_rate = await get_config_val('otp_rate', '1.0')
+    return float(default_rate)
+
+async def get_country_cc_limit(country_name):
+    if country_name in CACHE_LIMITS:
+        return int(CACHE_LIMITS[country_name])
+    global_limit = await get_config_val('global_cc_limit', '3')
+    return int(global_limit)
+
+def parse_otp_body(text):
+    if not text: return "Not found"
     
+    if "identifiants" in text.lower() or "identifiant" in text.lower():
+        match_id = re.search(r'(\d{8,12})', text)
+        if match_id:
+            return match_id.group(1)
+
+    numeric_match = re.search(r'\b(\d{4,8})(?!\d)', text)
+    if numeric_match: 
+        return numeric_match.group(1)
+        
+    mixed_match = re.search(r'\b(?=[A-Za-z]*\d)(?=\d*[A-Za-z])[A-Za-z0-9]{4,10}\b', text)
+    if mixed_match:
+        val = mixed_match.group(0)
+        if not re.match(r'^\d+(st|nd|rd|th)$', val, re.IGNORECASE):
+            return val
+            
+    return "Not found"
+
+# =========================================================================
+# --- STYLED INTERFACE SYSTEM WITH PREMIUM EMOJIS ---
+# =========================================================================
+def rich_btn(text, style=None, callback_data=None, url=None, copy_text=None, icon_emoji_id=None):
+    btn = {"text": text}
+    if style: btn["style"] = style 
+    if callback_data: btn["callback_data"] = callback_data
+    if url: btn["url"] = url
+    if copy_text: btn["copy_text"] = {"text": copy_text}
+    if icon_emoji_id: btn["icon_custom_emoji_id"] = icon_emoji_id
+    return btn
+
+async def send_rich_message(bot, chat_id, text, keyboard_rows, parse_mode='HTML', **kwargs):
+    payload = {
+        "chat_id": chat_id, "text": text, "parse_mode": parse_mode,
+        "reply_markup": {"inline_keyboard": keyboard_rows}
+    }
+    payload.update(kwargs)
+    url = f"https://api.telegram.org/bot{bot.token}/sendMessage"
+    try:
+        resp = await http_client.post(url, json=payload)
+        return resp.json()
+    except Exception as e: logger.error(f"Dispatch failure: {e}")
+
+async def edit_rich_message(bot, chat_id, message_id, text, keyboard_rows, parse_mode='HTML'):
+    payload = {
+        "chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": parse_mode,
+        "reply_markup": {"inline_keyboard": keyboard_rows}
+    }
+    url = f"https://api.telegram.org/bot{bot.token}/editMessageText"
+    try:
+        resp = await http_client.post(url, json=payload)
+        return resp.json()
+    except Exception as e: logger.error(f"Edit failure: {e}")
+
+# =========================================================================
+# --- KEYBOARD LAYOUT ARCHITECTURE ---
+# =========================================================================
+def build_admin_main(uid):
+    kb = [
+        [
+            {"text": "Number Upload", "style": "success", "icon_custom_emoji_id": "5353001161878182134"},
+            {"text": "Number Delete", "style": "danger", "icon_custom_emoji_id": "5422557736330106570"}
+        ],
+        [
+            {"text": "User List", "style": "primary", "icon_custom_emoji_id": "5352861489541714456"},
+            {"text": "Withdraw Requests", "style": "success", "icon_custom_emoji_id": "5348469219761626211"}
+        ],
+        [
+            {"text": "Admin Settings", "style": "primary", "icon_custom_emoji_id": "5420155432272438703"},
+            {"text": "Broadcast", "style": "primary", "icon_custom_emoji_id": "5352980533150259581"}
+        ]
+    ]
+    if uid == SUPER_ADMIN_ID:
+        kb.append([{"text": "Upload User Data", "style": "success", "icon_custom_emoji_id": "5353001161878182134"}])
+    
+    kb.append([{"text": "/start", "style": "success", "icon_custom_emoji_id": "5352694861990501856"}])
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
+def build_user_main():
+    kb = [
+        [
+            {"text": "Get Number 3", "style": "success", "icon_custom_emoji_id": "5352597830089347330"},
+            {"text": "Get Number 10", "style": "success", "icon_custom_emoji_id": "5337267511261960341"}
+        ],
+        [
+            {"text": "My Balance", "style": "primary", "icon_custom_emoji_id": "5190899075968441286"},
+            {"text": "Withdraw Funds", "style": "danger", "icon_custom_emoji_id": "5348469219761626211"}
+        ],
+        [
+            {"text": "Leaderboard", "style": "primary", "icon_custom_emoji_id": "5352877703043258544"},
+            {"text": "Stock History", "style": "primary", "icon_custom_emoji_id": "5352721946054268944"}
+        ],
+        [{"text": "/start", "style": "success", "icon_custom_emoji_id": "5352694861990501856"}]
+    ]
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
+# =========================================================================
+# --- ASSIGNED NUMBER AUTO-DELETE TIMER (2 HOURS) ---
+# =========================================================================
+async def auto_delete_assigned_number(assign_key):
+    await asyncio.sleep(7200)
+    if assign_key in CACHE_ASSIGNMENTS:
+        del CACHE_ASSIGNMENTS[assign_key]
+        save_local_db()
+
+# =========================================================================
+# --- USER STOCK ALLOCATION (FIFO ROTATION: MAXIMUM 20 ACTIVE NUMBERS) ---
+# =========================================================================
+async def engine_assign_batch(user_id, country_name, count=3):
+    try:
+        resolved_country, _ = resolve_country_name_and_code(country_name)
+        now_ts = datetime.now().timestamp()
+        
+        user_info_fetch = USER_FETCH_COUNT.get(user_id, {'count': 0, 'last_time': 0.0})
+        if user_info_fetch['count'] >= 2:
+            elapsed = now_ts - user_info_fetch['last_time']
+            if elapsed < 60:
+                left = int(60 - elapsed)
+                return None, f"⏳ আপনি পরপর ২ বার নাম্বার নিয়েছেন! দয়া করে আরও {left} সেকেন্ড অপেক্ষা করুন।"
+            else:
+                USER_FETCH_COUNT[user_id] = {'count': 0, 'last_time': now_ts}
+
+        # Find all active numbers assigned to this user, sorted by assigned timestamp (oldest first)
+        user_active_assignments = [
+            (as_k, as_v) for as_k, as_v in CACHE_ASSIGNMENTS.items()
+            if isinstance(as_v, dict) and as_v.get('user_id') == user_id and as_v.get('status') == 'assigned'
+        ]
+        user_active_assignments.sort(key=lambda x: x[1].get('assigned_at', ''))
+
+        # If adding `count` new numbers exceeds maximum 20 limit, remove exactly the oldest batch (FIFO)
+        total_after_add = len(user_active_assignments) + count
+        if total_after_add > 20:
+            excess_to_remove = total_after_add - 20
+            # Remove the oldest assigned numbers to make room for new ones
+            for i in range(min(excess_to_remove, len(user_active_assignments))):
+                old_key = user_active_assignments[i][0]
+                if old_key in CACHE_ASSIGNMENTS:
+                    del CACHE_ASSIGNMENTS[old_key]
+
+        assigned_numbers = []
+        ts_now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        for batch_id, b_data in list(CACHE_STOCK.items()):
+            b_country = b_data.get("country", "")
+            r_b_country, _ = resolve_country_name_and_code(b_country)
+            if isinstance(b_data, dict) and (r_b_country.upper() == resolved_country.upper() or b_country.upper() == country_name.upper()) and b_data.get("numbers"):
+                nums = b_data.get("numbers", [])
+                if not nums: continue
+                take_count = min(count - len(assigned_numbers), len(nums))
+                taken = nums[:take_count]
+                b_data["numbers"] = nums[take_count:]
+                assigned_numbers.extend(taken)
+                if len(assigned_numbers) >= count:
+                    break
+
+        if not assigned_numbers:
+            return None, "⚠️ Selected region stock empty!"
+
+        current_cnt = user_info_fetch['count'] + 1
+        USER_FETCH_COUNT[user_id] = {'count': current_cnt, 'last_time': datetime.now().timestamp()}
+
+        num_data_list = []
+        for num in assigned_numbers:
+            clean = normalize_num(num)
+            num_data_list.append({"full": clean})
+            
+            assign_key = f"as_{clean}_{user_id}"
+            CACHE_ASSIGNMENTS[assign_key] = {
+                'user_id': user_id,
+                'number': clean,
+                'country': resolved_country,
+                'assigned_at': ts_now,
+                'status': 'assigned'
+            }
+            asyncio.create_task(auto_delete_assigned_number(assign_key))
+
+        save_local_db()
+        return {"header": f"Numbers Assigned for {resolved_country}:", "numbers": num_data_list, "start_time": ts_now}, None
+    except Exception as e:
+        logger.error(f"Assignment core failure: {e}")
+        return None, "💥 Allocation process fail!"
+
+# =========================================================================
+# --- SIGNAL PROCESSING & AUTO-BAN CHECK ---
+# =========================================================================
+processed_ids = set()
+recent_sms_ids = {}
+
+async def engine_process_signal(application, record, is_demo=False, demo_uid=None):
+    async with otp_process_lock:
+        r_num = str(record.get('to', record.get('called_number', record.get('num', record.get('number', '1234567890')))))
+        r_msg = record.get('message', record.get('smstext', record.get('content', record.get('text', 'Code de verification: 98765'))))
+        r_cli = record.get('senderid', record.get('cli', record.get('service', record.get('app', record.get('name', record.get('from', 'eBay'))))))
+        
+        if not is_demo:
+            if not r_num or not r_msg: return False
+            sms_id = str(record.get('smsid', record.get('id', '')))
+            if sms_id and sms_id in recent_sms_ids:
+                return False
+                
+            n_clean = normalize_num(r_num)
+            m_hash = hashlib.md5(f"{n_clean}_{r_msg}".encode()).hexdigest()
+            
+            if m_hash in processed_ids:
+                return False
+        else:
+            n_clean = "1234567890"
+            m_hash = f"demo_{datetime.now().timestamp()}"
+
+        try:
+            matched_assign = None
+            assigned_region = "Algeria" if is_demo else "Global"
+            
+            if not is_demo:
+                for as_key, as_data in CACHE_ASSIGNMENTS.items():
+                    if isinstance(as_data, dict) and as_data.get('status') == 'assigned':
+                        as_num = normalize_num(as_data.get('number', ''))
+                        if as_num.endswith(n_clean[-8:]) if len(n_clean) >= 8 else as_num == n_clean:
+                            matched_assign = as_data
+                            assigned_region = as_data.get('country', 'Global')
+                            break
+
+            flag_tag = get_flag_emoji_tag(assigned_region)
+            otp_code = parse_otp_body(r_msg)
+            escaped_body = html.escape(r_msg)
+            lang_name, lang_code = detect_language_code(r_msg)
+            if is_demo:
+                lang_code = "FR"
+
+            # Button with ONLY the OTP code
+            kb = [
+                [rich_btn(f"{otp_code}", style="primary", copy_text=otp_code, icon_emoji_id="5352862640592949843")]
+            ]
+
+            if is_demo:
+                masked_name = mask_username("AdminDemoUser")
+                masked_uid = mask_user_id(str(demo_uid))
+                formatted_notif_text = (
+                    f"{flag_tag} {PEM['new_em']} <code>{r_num}</code> {PEM['top_em']} <b>{lang_code}</b>\n\n"
+                    f"{PEM['srv_em']} <b>Service:</b> <code>{r_cli}</code>\n"
+                    f"{PEM['msg_em']} <b>Message:</b> <code>{escaped_body}</code>\n\n"
+                    f"{PEM['user']} <b>User:</b> {masked_name} ({masked_uid})"
+                )
+                for gid in TARGET_GROUP_IDS:
+                    try: await send_rich_message(application.bot, gid, formatted_notif_text, kb)
+                    except: pass
+                try: await send_rich_message(application.bot, SUPER_ADMIN_ID, f"🔔 <b>[Master Admin Demo Alert]</b>\n\n{formatted_notif_text}", kb)
+                except: pass
+                return True
+
+            if matched_assign:
+                u_id = matched_assign.get('user_id')
+                u_data = CACHE_USERS.get(str(u_id), {}) if isinstance(CACHE_USERS.get(str(u_id)), dict) else {}
+                if u_data.get('status') == 'banned': return False
+                
+                full_u_name = u_data.get('name', 'User')
+                masked_name = mask_username(full_u_name)
+                masked_uid = mask_user_id(u_id)
+
+                formatted_notif_text = (
+                    f"{flag_tag} {PEM['new_em']} <code>{r_num}</code> {PEM['top_em']} <b>{lang_code}</b>\n\n"
+                    f"{PEM['srv_em']} <b>Service:</b> <code>{r_cli}</code>\n"
+                    f"{PEM['msg_em']} <b>Message:</b> <code>{escaped_body}</code>\n\n"
+                    f"{PEM['user']} <b>User:</b> {masked_name} ({masked_uid})"
+                )
+
+                u_msgs = CACHE_PROCESSED.get(str(u_id), {}) if isinstance(CACHE_PROCESSED.get(str(u_id)), dict) else {}
+                
+                if m_hash not in u_msgs:
+                    processed_ids.add(m_hash)
+                    payout = await get_country_payout(assigned_region)
+                    
+                    curr_bal = float(u_data.get('balance', 0.0))
+                    curr_otp = int(u_data.get('otp_count', 0))
+                    total = curr_bal + payout
+                    
+                    u_data.update({'balance': total, 'otp_count': curr_otp + 1})
+
+                    if str(u_id) not in CACHE_PROCESSED or not isinstance(CACHE_PROCESSED[str(u_id)], dict):
+                        CACHE_PROCESSED[str(u_id)] = {}
+                    
+                    CACHE_PROCESSED[str(u_id)][m_hash] = {'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    
+                    auto_ban_status = await get_config_val('auto_ban_status', 'on')
+                    if auto_ban_status.lower() == 'on':
+                        seven_days_ago = datetime.now() - timedelta(days=7)
+                        recent_7d_earnings = 0.0
+                        for hm, hm_val in CACHE_PROCESSED[str(u_id)].items():
+                            try:
+                                t_dt = datetime.strptime(hm_val.get('timestamp'), '%Y-%m-%d %H:%M:%S')
+                                if t_dt >= seven_days_ago:
+                                    recent_7d_earnings += payout
+                            except:
+                                pass
+
+                        if curr_otp >= 20 and recent_7d_earnings < 2000.0:
+                            u_data['status'] = 'banned'
+                            save_local_db()
+                            ban_alert_msg = (
+                                f"{PEM['warn']} <b>AUTO-BAN TRIGGERED</b> {PEM['warn']}\n\n"
+                                f"👤 User: {full_u_name} (<code>{u_id}</code>)\n"
+                                f"💵 Last 7 Days Earnings: Tk {recent_7d_earnings:.2f}\n"
+                                f"🛡 Reason: Earnings below Tk 2000 limit in 7 days."
+                            )
+                            for aid in ADMIN_IDS:
+                                try: await send_rich_message(application.bot, aid, ban_alert_msg, [])
+                                except: pass
+                            try: await send_rich_message(application.bot, u_id, f"{PEM['no']} <b>You have been automatically banned for low 7-day earnings threshold.</b>", [])
+                            except: pass
+                            return False
+
+                    save_local_db()
+
+                    for gid in TARGET_GROUP_IDS:
+                        try: await send_rich_message(application.bot, gid, formatted_notif_text, kb)
+                        except: pass
+                    
+                    user_inbox_alert = f"{formatted_notif_text}\n\nTk {payout:.2f} added to your balance!\n💳 Balance: Tk {total:.2f}"
+                    try: await send_rich_message(application.bot, u_id, user_inbox_alert, kb)
+                    except: pass
+                    return True
+            else:
+                formatted_notif_text = (
+                    f"{flag_tag} {PEM['new_em']} <code>{r_num}</code> {PEM['top_em']} <b>{lang_code}</b>\n\n"
+                    f"{PEM['srv_em']} <b>Service:</b> <code>{r_cli}</code>\n"
+                    f"{PEM['msg_em']} <b>Message:</b> <code>{escaped_body}</code>\n\n"
+                    f"{PEM['user']} <b>User:</b> No user assigned"
+                )
+                for gid in TARGET_GROUP_IDS:
+                    try: await send_rich_message(application.bot, gid, formatted_notif_text, kb)
+                    except: pass
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Signal Routing Error: {e}")
+            return False
+
+# =========================================================================
+# --- WEBHOOK SERVER ---
+# =========================================================================
+bot_application_instance = None
+
+async def handle_postback(request):
+    try:
+        data = dict(request.query)
+        if not data:
+            try:
+                data = await request.json()
+            except:
+                try:
+                    data = dict(await request.post())
+                except:
+                    data = {}
+        
+        if data and bot_application_instance:
+            asyncio.create_task(engine_process_signal(bot_application_instance, data))
+            return web.Response(text="200 OK", status=200)
+        return web.Response(text="Invalid payload", status=400)
+    except Exception as e:
+        logger.error(f"Postback error: {e}")
+        return web.Response(text="Error", status=500)
+
+async def start_webhook_server():
+    app = web.Application()
+    app.router.add_post('/postback', handle_postback)
+    app.router.add_get('/postback', handle_postback)
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, '0.0.0.0', WEBHOOK_PORT)
     await site.start()
-    logging.info(f"Webhook server started on port {port}")
+    logger.info(f"Direct Postback Webhook Server started on port {WEBHOOK_PORT}")
+
+# =========================================================================
+# --- ROUTING & HANDLERS ENGINE ---
+# =========================================================================
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user: return
+    uid, name = user.id, user.full_name
+    if user.username: name = f"@{user.username}"
+    
+    if uid not in ADMIN_IDS and await check_is_restricted(uid):
+        await update.message.reply_text(f"{PEM['no']} <b>Access Restricted!</b>", parse_mode='HTML')
+        return
+    
+    u_str = str(uid)
+    if u_str not in CACHE_USERS or not isinstance(CACHE_USERS[u_str], dict):
+        CACHE_USERS[u_str] = {'name': name, 'balance': 0.0, 'otp_count': 0, 'status': 'active'}
+        save_local_db()
+    else:
+        CACHE_USERS[u_str]['name'] = name
+        save_local_db()
+
+    context.user_data['state'] = None
+    if uid in ADMIN_IDS:
+        await update.message.reply_text(f"{PEM['admin']} <b>Admin Control Active!</b>", reply_markup=build_admin_main(uid), parse_mode='HTML')
+    else:
+        await update.message.reply_text(f"{PEM['hi']} <b>Welcome {name}!</b>", reply_markup=build_user_main(), parse_mode='HTML')
+
+async def router_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = query.from_user.id
+    data = query.data
+    if uid not in ADMIN_IDS and await check_is_restricted(uid): return
+
+    if data == "select_country_menu":
+        counts = {}
+        for b_id, b_val in CACHE_STOCK.items():
+            if isinstance(b_val, dict) and b_val.get('country'):
+                c = b_val.get('country')
+                r_c, _ = resolve_country_name_and_code(c)
+                cnt = len(b_val.get('numbers', []))
+                if cnt > 0: counts[r_c] = counts.get(r_c, 0) + cnt
+        if not counts: 
+            try: await query.answer("⚠️ Stock empty.", show_alert=True)
+            except: pass
+        else:
+            try: await query.answer()
+            except: pass
+            btns = [[rich_btn(f"{c} ({cnt})", "primary", f"alloc_{c}", icon_emoji_id=RAW_FLAG_EMOJIS.get(resolve_country_name_and_code(c)[1], {}).get('id', "5780471598922337683"))] for c, cnt in counts.items()]
+            btns.append([rich_btn("Return", "danger", "exit_session", icon_emoji_id="5422557736330106570")])
+            await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"{PEM['world']} <b>Select Region:</b>", btns)
+
+    elif data.startswith("alloc_") or data == "change_num":
+        region = data.replace("alloc_", "") if data.startswith("alloc_") else context.user_data.get('l_c')
+        if not region: return
+        resolved_region, _ = resolve_country_name_and_code(region)
+        
+        now_ts = datetime.now().timestamp()
+        user_info_fetch = USER_FETCH_COUNT.get(uid, {'count': 0, 'last_time': 0.0})
+        if user_info_fetch['count'] >= 2:
+            elapsed = now_ts - user_info_fetch['last_time']
+            if elapsed < 60:
+                left = int(60 - elapsed)
+                try:
+                    await query.answer(f"⏳ আপনি পরপর ২ বার নাম্বার নিয়েছেন! দয়া করে আরও {left} সেকেন্ড অপেক্ষা করুন।", show_alert=True)
+                except:
+                    pass
+                return
+
+        context.user_data['l_c'] = resolved_region
+        batch_size = context.user_data.get('p_count', 10)
+        res, err = await engine_assign_batch(uid, resolved_region, batch_size)
+        if err:
+            try: await query.answer(err, show_alert=True)
+            except: pass
+        else:
+            try: await query.answer()
+            except: pass
+            await render_active_numbers_message(context.bot, query.message.chat_id, query.message.message_id, uid, resolved_region, res)
+
+    elif data == "toggle_cc":
+        region = context.user_data.get('l_c', 'US')
+        current_toggle = USER_CC_TOGGLE.get(uid, False)
+        USER_CC_TOGGLE[uid] = not current_toggle
+        
+        assigned_nums = [v.get('number') for v in CACHE_ASSIGNMENTS.values() if isinstance(v, dict) and v.get('user_id') == uid and v.get('status') == 'assigned']
+        if not assigned_nums:
+            try: await query.answer("⚠️ No active numbers found.", show_alert=True)
+            except: pass
+            return
+        
+        res = {"header": f"Numbers Assigned for {region}:", "numbers": [{"full": n} for n in assigned_nums]}
+        try: await query.answer()
+        except: pass
+        await render_active_numbers_message(context.bot, query.message.chat_id, query.message.message_id, uid, region, res)
+
+    elif data == "exit_session":
+        try: await query.message.delete()
+        except: pass
+        await context.bot.send_message(chat_id=uid, text="🏁 Dashboard ready.", reply_markup=build_admin_main(uid) if uid in ADMIN_IDS else build_user_main())
+
+    elif data.startswith("adm_del_") and not data.startswith("adm_del_yes_"):
+        if uid not in ADMIN_IDS: return
+        reg = data.replace("adm_del_", "")
+        kb = [
+            [rich_btn("Yes, Delete", style="danger", callback_data=f"adm_del_yes_{reg}", icon_emoji_id="5352694861990501856")],
+            [rich_btn("Cancel", style="primary", callback_data="exit_session", icon_emoji_id="5420130255174145507")]
+        ]
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"{PEM['warn']} <b>Delete stock for {reg}?</b>", kb)
+
+    elif data.startswith("adm_del_yes_"):
+        if uid not in ADMIN_IDS: return
+
+        # IMPORTANT: callback is adm_del_yes_<country>.
+        # The old code used replace("adm_del_", ""), which produced
+        # "yes_<country>" and therefore never matched the real country.
+        reg = data[len("adm_del_yes_"):]
+        resolved_reg, resolved_code = resolve_country_name_and_code(reg)
+        deleted_count = 0
+        deleted_batches = 0
+
+        for b_id, b_val in list(CACHE_STOCK.items()):
+            if not isinstance(b_val, dict):
+                continue
+
+            stored_country = str(b_val.get("country", "")).strip()
+            stored_resolved, stored_code = resolve_country_name_and_code(stored_country)
+
+            if (stored_resolved.upper() == resolved_reg.upper()
+                    or stored_code.upper() == resolved_code.upper()
+                    or stored_country.upper() == reg.upper()):
+                nums = b_val.get("numbers", [])
+                if isinstance(nums, list):
+                    deleted_count += len(nums)
+                deleted_batches += 1
+                del CACHE_STOCK[b_id]
+
+        # Persist the deletion immediately.
+        save_local_db()
+        try:
+            await query.answer(f"Deleted {deleted_count} numbers", show_alert=True)
+        except Exception:
+            pass
+        await query.edit_message_text(
+            f"{PEM['ok']} <b>Deleted {deleted_count} unused numbers</b> from <b>{html.escape(resolved_reg)}</b>.\n"
+            f"Batches removed: {deleted_batches}",
+            parse_mode='HTML'
+        )
+
+    elif data == "admin_menu_panel":
+        if uid not in ADMIN_IDS: return
+        current_ban_status = await get_config_val('auto_ban_status', 'on')
+        ban_toggle_text = f"Auto Ban: {current_ban_status.upper()}"
+        ban_toggle_style = "success" if current_ban_status.lower() == 'on' else "danger"
+
+        kb = [
+            [
+                rich_btn("Ban / Unban", style="danger", callback_data="adm_sub_ban_menu", icon_emoji_id="5334807341109908955"),
+                rich_btn("Balance Mgmt", style="success", callback_data="adm_sub_bal_menu", icon_emoji_id="5348469219761626211")
+            ],
+            [
+                rich_btn("User Search", style="primary", callback_data="adm_sub_search_menu", icon_emoji_id="5463352748751753567"),
+                rich_btn("Banned List", style="primary", callback_data="adm_sub_banned_list", icon_emoji_id="5352861489541714456")
+            ],
+            [
+                rich_btn("Get Unused TXT", style="success", callback_data="adm_get_unused_txt", icon_emoji_id="5352721946054268944"),
+                rich_btn("Get User List TXT", style="success", callback_data="adm_get_userlist_txt", icon_emoji_id="5352861489541714456")
+            ],
+            [
+                rich_btn("Set Country Rates", style="primary", callback_data="adm_set_country_rate", icon_emoji_id="5348469219761626211"),
+                rich_btn("Set USD Rate", style="success", callback_data="adm_set_usd_rate", icon_emoji_id="5348469219761626211")
+            ],
+            [
+                rich_btn(ban_toggle_text, style=ban_toggle_style, callback_data="adm_toggle_autoban", icon_emoji_id="5336944168944047463"),
+                rich_btn("Demo OTP", style="primary", callback_data="adm_demo_otp", icon_emoji_id="5337302974806922068")
+            ],
+            [rich_btn("Main Menu", style="danger", callback_data="exit_session", icon_emoji_id="5422557736330106570")]
+        ]
+        try: await query.answer()
+        except: pass
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"{PEM['gear']} <b>Advanced Admin Panel & Management:</b>", kb)
+
+    elif data == "adm_demo_otp":
+        if uid not in ADMIN_IDS: return
+        try:
+            await query.answer("🚀 Demo OTP sent to group & admin inbox!", show_alert=True)
+        except:
+            pass
+        asyncio.create_task(engine_process_signal(context.application, {}, is_demo=True, demo_uid=uid))
+
+    elif data == "adm_toggle_autoban":
+        if uid not in ADMIN_IDS: return
+        curr = await get_config_val('auto_ban_status', 'on')
+        new_val = 'off' if curr.lower() == 'on' else 'on'
+        await set_config_val('auto_ban_status', new_val)
+        try: await query.answer(f"Auto Ban is now {new_val.upper()}", show_alert=True)
+        except: pass
+        
+        current_ban_status = new_val
+        ban_toggle_text = f"Auto Ban: {current_ban_status.upper()}"
+        ban_toggle_style = "success" if current_ban_status.lower() == 'on' else "danger"
+        kb = [
+            [
+                rich_btn("Ban / Unban", style="danger", callback_data="adm_sub_ban_menu", icon_emoji_id="5334807341109908955"),
+                rich_btn("Balance Mgmt", style="success", callback_data="adm_sub_bal_menu", icon_emoji_id="5348469219761626211")
+            ],
+            [
+                rich_btn("User Search", style="primary", callback_data="adm_sub_search_menu", icon_emoji_id="5463352748751753567"),
+                rich_btn("Banned List", style="primary", callback_data="adm_sub_banned_list", icon_emoji_id="5352861489541714456")
+            ],
+            [
+                rich_btn("Get Unused TXT", style="success", callback_data="adm_get_unused_txt", icon_emoji_id="5352721946054268944"),
+                rich_btn("Get User List TXT", style="success", callback_data="adm_get_userlist_txt", icon_emoji_id="5352861489541714456")
+            ],
+            [
+                rich_btn("Set Country Rates", style="primary", callback_data="adm_set_country_rate", icon_emoji_id="5348469219761626211"),
+                rich_btn("Set USD Rate", style="success", callback_data="adm_set_usd_rate", icon_emoji_id="5348469219761626211")
+            ],
+            [
+                rich_btn(ban_toggle_text, style=ban_toggle_style, callback_data="adm_toggle_autoban", icon_emoji_id="5336944168944047463"),
+                rich_btn("Demo OTP", style="primary", callback_data="adm_demo_otp", icon_emoji_id="5337302974806922068")
+            ],
+            [rich_btn("Main Menu", style="danger", callback_data="exit_session", icon_emoji_id="5422557736330106570")]
+        ]
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"{PEM['gear']} <b>Advanced Admin Panel & Management:</b>", kb)
+
+    elif data == "adm_set_usd_rate":
+        if uid not in ADMIN_IDS: return
+        context.user_data['state'] = 'ADM_SET_USD_RATE_VAL'
+        curr_usd = await get_config_val('usd_rate', '126.0')
+        await context.bot.send_message(chat_id=uid, text=f"💵 Enter new USD rate for Binance withdraw (Current: Tk {curr_usd}/$):", parse_mode='HTML')
+
+    elif data == "adm_set_country_rate":
+        if uid not in ADMIN_IDS: return
+        countries = set()
+        for v in CACHE_STOCK.values():
+            if isinstance(v, dict) and v.get('country'):
+                r_c, _ = resolve_country_name_and_code(v.get('country'))
+                countries.add(r_c)
+        if not countries:
+            try: await query.answer("⚠️ No stock countries available.", show_alert=True)
+            except: pass
+            return
+        kb = [[rich_btn(f"Set Rate: {c}", "primary", f"adm_rate_{c}")] for c in countries]
+        kb.append([rich_btn("🔙 Back", "danger", "admin_menu_panel")])
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, "✍️ <b>Select Country to Set OTP Rate:</b>", kb)
+
+    elif data.startswith("adm_rate_"):
+        if uid not in ADMIN_IDS: return
+        target_c = data.replace("adm_rate_", "")
+        context.user_data['target_rate_country'] = target_c
+        context.user_data['state'] = 'ADM_SET_COUNTRY_RATE_VAL'
+        await context.bot.send_message(chat_id=uid, text=f"✍️ Enter new OTP rate for <b>{target_c}</b> (Current: {CACHE_RATES.get(target_c, await get_config_val('otp_rate', '1.0'))} Tk):", parse_mode='HTML')
+
+    elif data == "adm_get_unused_txt":
+        if uid not in ADMIN_IDS: return
+        try:
+            stream = StringIO()
+            stream.write("📦 Unused Stock Numbers Export\n" + "="*40 + "\n\n")
+            has_stock = False
+            for b_id, b_val in CACHE_STOCK.items():
+                if isinstance(b_val, dict) and b_val.get('numbers'):
+                    c = b_val.get('country', 'Global')
+                    r_c, _ = resolve_country_name_and_code(c)
+                    nums = b_val.get('numbers', [])
+                    if nums:
+                        has_stock = True
+                        stream.write(f"--- Country: {r_c} ---\n")
+                        for n in nums:
+                            stream.write(f"+{normalize_num(n)}\n")
+                        stream.write("\n")
+            if not has_stock:
+                try: await query.answer("⚠️ No unused stock found.", show_alert=True)
+                except: pass
+                return
+            bio = BytesIO(stream.getvalue().encode('utf-8'))
+            bio.name = f"unused_stock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            try: await query.answer()
+            except: pass
+            await context.bot.send_document(chat_id=uid, document=bio, caption=f"{PEM['ok']} <b>Unused numbers exported successfully.</b>", parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"Unused stock export error: {e}")
+
+    elif data == "adm_get_userlist_txt":
+        if uid not in ADMIN_IDS: return
+        try:
+            stream = StringIO()
+            stream.write("👥 Registered Active Users Export\n" + "="*45 + "\n\n")
+            for u_id, u_val in CACHE_USERS.items():
+                if isinstance(u_val, dict):
+                    name = u_val.get('name', 'N/A')
+                    bal = u_val.get('balance', 0.0)
+                    otps = u_val.get('otp_count', 0)
+                    status = u_val.get('status', 'active')
+                    stream.write(f"UID: {u_id} | Name: {name} | Balance: Tk {bal:.2f} | OTPs: {otps} | Status: {status}\n")
+            bio = BytesIO(stream.getvalue().encode('utf-8'))
+            bio.name = f"users_list_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            try: await query.answer()
+            except: pass
+            await context.bot.send_document(chat_id=uid, document=bio, caption=f"{PEM['ok']} <b>User list exported successfully.</b>", parse_mode='HTML')
+        except Exception as e:
+            logger.error(f"User list export error: {e}")
+
+    elif data == "adm_sub_ban_menu":
+        if uid not in ADMIN_IDS: return
+        kb = [
+            [rich_btn("Ban User", style="danger", callback_data="adm_trigger_ban", icon_emoji_id="5334807341109908955")],
+            [rich_btn("Unban User", style="success", callback_data="adm_trigger_unban", icon_emoji_id="5352694861990501856")],
+            [rich_btn("Back", style="primary", callback_data="admin_menu_panel", icon_emoji_id="5422557736330106570")]
+        ]
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, "⚙️ <b>Ban / Unban Management:</b>", kb)
+
+    elif data == "adm_trigger_ban":
+        if uid not in ADMIN_IDS: return
+        context.user_data['state'] = 'ADM_BAN_U'
+        await context.bot.send_message(chat_id=uid, text="🚫 Enter target UID to ban:", parse_mode='HTML')
+
+    elif data == "adm_trigger_unban":
+        if uid not in ADMIN_IDS: return
+        context.user_data['state'] = 'ADM_UNBAN_U'
+        await context.bot.send_message(chat_id=uid, text="✅ Enter target UID to unban:", parse_mode='HTML')
+
+    elif data == "adm_sub_bal_menu":
+        if uid not in ADMIN_IDS: return
+        kb = [
+            [rich_btn("Add Balance", style="success", callback_data="adm_trigger_add_bal", icon_emoji_id="5420323438508155202")],
+            [rich_btn("Remove Balance", style="danger", callback_data="adm_trigger_rem_bal", icon_emoji_id="5870818207383686839")],
+            [rich_btn("Back", style="primary", callback_data="admin_menu_panel", icon_emoji_id="5422557736330106570")]
+        ]
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, "💰 <b>Balance Management:</b>", kb)
+
+    elif data == "adm_trigger_add_bal":
+        if uid not in ADMIN_IDS: return
+        context.user_data['state'] = 'ADM_ADD_BAL'
+        await context.bot.send_message(chat_id=uid, text="➕ Enter UID and Amount (Format: UID AMOUNT):", parse_mode='HTML')
+
+    elif data == "adm_trigger_rem_bal":
+        if uid not in ADMIN_IDS: return
+        context.user_data['state'] = 'ADM_REM_BAL'
+        await context.bot.send_message(chat_id=uid, text="➖ Enter UID and Amount (Format: UID AMOUNT):", parse_mode='HTML')
+
+    elif data == "adm_sub_search_menu":
+        if uid not in ADMIN_IDS: return
+        context.user_data['state'] = 'ADM_USER_LOOKUP'
+        await context.bot.send_message(chat_id=uid, text="🔍 Enter target User UID to check details (OTPs breakdown over last 7 days):", parse_mode='HTML')
+
+    elif data == "adm_sub_banned_list":
+        if uid not in ADMIN_IDS: return
+        banned_users = [f"UID: <code>{u_id}</code> | Name: {html.escape(v.get('name', 'N/A'))}" for u_id, v in CACHE_USERS.items() if isinstance(v, dict) and v.get('status') == 'banned']
+        txt = "🚫 <b>Banned Users List:</b>\n\n" + ("\n".join(banned_users) if banned_users else "No banned users.")
+        kb = [[rich_btn("Back", style="primary", callback_data="admin_menu_panel")]]
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, txt, kb)
+
+    elif data.startswith("adm_pay_acc_"):
+        if uid not in ADMIN_IDS: return
+        w_id = data.replace("adm_pay_acc_", "")
+        if w_id in CACHE_WITHDRAWALS:
+            CACHE_WITHDRAWALS[w_id]['status'] = 'accepted'
+            save_local_db()
+            await query.edit_message_text(f"{PEM['ok']} Req {w_id} Authorized.")
+
+    elif data.startswith("adm_pay_rej_"):
+        if uid not in ADMIN_IDS: return
+        w_id = data.replace("adm_pay_rej_", "")
+        if w_id in CACHE_WITHDRAWALS:
+            w = CACHE_WITHDRAWALS[w_id]
+            w['status'] = 'rejected'
+            u_str = str(w.get('user_id'))
+            if u_str in CACHE_USERS:
+                CACHE_USERS[u_str]['balance'] = float(CACHE_USERS[u_str].get('balance', 0)) + float(w.get('amount', 0))
+            save_local_db()
+            await query.edit_message_text(f"{PEM['no']} Withdrawal rejected. Funds restored.")
+
+    elif data.startswith("w_method_"):
+        channel = data.replace("w_method_", "")
+        context.user_data['w_method'] = channel
+        context.user_data['state'] = 'IN_W_AMT'
+        usd_rate = float(await get_config_val('usd_rate', '126.0'))
+        
+        if channel == "Binance":
+            await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"Selected <b>Binance</b>.\n💵 Min: $0.42 (~Tk 50)\n\n<b>Enter amount in USD (e.g., 5 or 10):</b>", [])
+        elif channel == "Bkash":
+            limit = 1000.0
+            await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"Selected <b>Bkash</b>.\n💵 Min: Tk {limit} (~${limit/usd_rate:.2f})\n\n<b>Enter amount in BDT:</b>", [])
+        else:
+            limit = 1000.0
+            await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"Selected <b>Nagad</b>.\n💵 Min: Tk {limit} (~${limit/usd_rate:.2f})\n\n<b>Enter amount in BDT:</b>", [])
+
+    elif data == "adm_total_paid_show":
+        if uid not in ADMIN_IDS: return
+        limit_date = (datetime.now() - timedelta(days=6)).strftime('%Y-%m-%d %H:%M:%S')
+        paid_users, total_sum = set(), 0.0
+        for w in CACHE_WITHDRAWALS.values():
+            if isinstance(w, dict) and w.get('status') == 'accepted' and w.get('timestamp', '') >= limit_date:
+                paid_users.add(w.get('user_id'))
+                total_sum += float(w.get('amount', 0.0))
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"{PEM['money']} <b>Total Paid (Last 6 Days)</b>\n\nUsers: {len(paid_users)}\nTotal: Tk {total_sum:.2f}", [[rich_btn("Back", style="primary", callback_data="exit_session")]])
+
+    elif data == "adm_total_paid_clear":
+        if uid not in ADMIN_IDS: return
+        for w_id in [k for k, v in CACHE_WITHDRAWALS.items() if isinstance(v, dict) and v.get('status') == 'accepted']:
+            del CACHE_WITHDRAWALS[w_id]
+        save_local_db()
+        await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, f"{PEM['ok']} History cleared.", [[rich_btn("Back", style="primary", callback_data="exit_session")]])
+
+    elif data.startswith("vstock_"):
+        await display_country_stock(update, context, data.replace("vstock_", ""))
+    elif data.startswith("dlstock_"):
+        await download_country_stock_file(update, context, data.replace("dlstock_", ""))
+    elif data == "back_stock_hist":
+        await dispatch_stock_history_menu(update, context, edit_message_id=query.message.message_id)
+
+async def render_active_numbers_message(bot, chat_id, message_id, uid, region, res):
+    resolved_region, _ = resolve_country_name_and_code(region)
+    remove_cc = USER_CC_TOGGLE.get(uid, True)
+    cc_prefix = get_country_code_prefix(resolved_region)
+    flag_emoji = get_flag_emoji_tag(resolved_region)
+    
+    keyboard_rows = []
+    for n in res['numbers']:
+        full_num = n['full']
+        display_num = full_num
+        if remove_cc and cc_prefix and display_num.startswith(cc_prefix):
+            display_num = display_num[len(cc_prefix):]
+        
+        btn_text = f"+{display_num}"
+        copy_val = display_num
+        keyboard_rows.append([rich_btn(btn_text, style="primary", copy_text=copy_val, icon_emoji_id=RAW_FLAG_EMOJIS.get(resolve_country_name_and_code(resolved_region)[1], {}).get('id', "5780471598922337683"))])
+
+    cc_btn_text = "Add CC" if remove_cc else "Remove CC"
+    cc_btn_style = "success" if remove_cc else "danger"
+    keyboard_rows.append([rich_btn(cc_btn_text, style=cc_btn_style, callback_data="toggle_cc", icon_emoji_id="5420323438508155202" if remove_cc else "5422557736330106570")])
+
+    keyboard_rows.append([rich_btn("Change Number", style="success", callback_data="change_num", icon_emoji_id="5352597830089347330")])
+    keyboard_rows.append([rich_btn("Change Country", style="primary", callback_data="select_country_menu", icon_emoji_id="5336972142066047577")])
+
+    text = f"{flag_emoji} <b>Waiting for OTP</b>\n\n{res['header']}"
+    await edit_rich_message(bot, chat_id, message_id, text, keyboard_rows)
+
+async def router_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if not msg or not msg.text: return
+    raw = msg.text.strip()
+    uid = msg.from_user.id
+    name = f"@{msg.from_user.username}" if msg.from_user.username else msg.from_user.full_name
+    state = context.user_data.get('state')
+    
+    if uid not in ADMIN_IDS and await check_is_restricted(uid): return
+
+    clean_raw = re.sub(r'[^\w\s]', '', raw).strip().lower()
+
+    if raw == "/start":
+        await handle_start(update, context)
+        return
+
+    if "user menu" in clean_raw:
+        await msg.reply_text(f"{PEM['user']} <b>User Menu:</b>", reply_markup=build_user_main(), parse_mode='HTML')
+        return
+
+    if "get number 3" in clean_raw:
+        context.user_data['p_count'] = 3
+        counts = {}
+        for b_val in CACHE_STOCK.values():
+            if isinstance(b_val, dict) and b_val.get('country'):
+                c = b_val.get('country')
+                r_c, _ = resolve_country_name_and_code(c)
+                cnt = len(b_val.get('numbers', []))
+                if cnt > 0: counts[r_c] = counts.get(r_c, 0) + cnt
+        if counts:
+            btns = [[rich_btn(f"{c} ({cnt})", "primary", f"alloc_{c}", icon_emoji_id=RAW_FLAG_EMOJIS.get(resolve_country_name_and_code(c)[1], {}).get('id', "5780471598922337683"))] for c, cnt in counts.items()]
+            await send_rich_message(context.bot, uid, f"{PEM['world']} <b>Select Region:</b>", btns)
+        else: await msg.reply_text("⚠️ Inventory empty.")
+        return
+    elif "get number 10" in clean_raw:
+        context.user_data['p_count'] = 10
+        counts = {}
+        for b_val in CACHE_STOCK.values():
+            if isinstance(b_val, dict) and b_val.get('country'):
+                c = b_val.get('country')
+                r_c, _ = resolve_country_name_and_code(c)
+                cnt = len(b_val.get('numbers', []))
+                if cnt > 0: counts[r_c] = counts.get(r_c, 0) + cnt
+        if counts:
+            btns = [[rich_btn(f"{c} ({cnt})", "primary", f"alloc_{c}", icon_emoji_id=RAW_FLAG_EMOJIS.get(resolve_country_name_and_code(c)[1], {}).get('id', "5780471598922337683"))] for c, cnt in counts.items()]
+            await send_rich_message(context.bot, uid, f"{PEM['world']} <b>Select Region:</b>", btns)
+        else: await msg.reply_text("⚠️ Inventory empty.")
+        return
+    elif "my balance" in clean_raw:
+        u_val = CACHE_USERS.get(str(uid), {})
+        u_bal = float(u_val.get('balance', 0.0)) if isinstance(u_val, dict) else 0.0
+        usd_rate = float(await get_config_val('usd_rate', '126.0'))
+        await send_rich_message(context.bot, uid, f"💳 <b>Balance:</b> Tk {u_bal:.2f}\n💲 <b>USD:</b> $ {u_bal/usd_rate:.2f}", [])
+        return
+    elif "leaderboard" in clean_raw: 
+        await dispatch_leaderboard(update)
+        return
+    elif "stock history" in clean_raw:
+        await dispatch_stock_history_menu(update, context)
+        return
+    elif "withdraw funds" in clean_raw:
+        kb = [
+            [
+                rich_btn("Bkash", style="primary", callback_data="w_method_Bkash", icon_emoji_id="6334668932980415143"),
+                rich_btn("Nagad", style="success", callback_data="w_method_Nagad", icon_emoji_id="6334715949987404568")
+            ],
+            [
+                rich_btn("Binance (USD)", style="primary", callback_data="w_method_Binance", icon_emoji_id="6334330042880893669")
+            ]
+        ]
+        await send_rich_message(context.bot, uid, f"{PEM['gift']} <b>Select Payout Channel:</b>", kb)
+        return
+
+    if uid in ADMIN_IDS:
+        if "number upload" in clean_raw:
+            await msg.reply_text(f"{PEM['upload']} Enter country name or short code (e.g. Mali, ML, US, Bangladesh):"); context.user_data['state'] = 'ADM_UP_C'; return
+        elif "number delete" in clean_raw: 
+            await dispatch_wipe_ui(update, context); return 
+        elif "user list" in clean_raw:
+            await admin_export_user_db(update, context); return
+        elif "withdraw requests" in clean_raw: 
+            await dispatch_payout_ui(update, context); return
+        elif "admin settings" in clean_raw:
+            current_ban_status = await get_config_val('auto_ban_status', 'on')
+            ban_toggle_text = f"Auto Ban: {current_ban_status.upper()}"
+            ban_toggle_style = "success" if current_ban_status.lower() == 'on' else "danger"
+
+            kb = [
+                [
+                    rich_btn("Ban / Unban", style="danger", callback_data="adm_sub_ban_menu", icon_emoji_id="5334807341109908955"),
+                    rich_btn("Balance Mgmt", style="success", callback_data="adm_sub_bal_menu", icon_emoji_id="5348469219761626211")
+                ],
+                [
+                    rich_btn("User Search", style="primary", callback_data="adm_sub_search_menu", icon_emoji_id="5463352748751753567"),
+                    rich_btn("Banned List", style="primary", callback_data="adm_sub_banned_list", icon_emoji_id="5352861489541714456")
+                ],
+                [
+                    rich_btn("Get Unused TXT", style="success", callback_data="adm_get_unused_txt", icon_emoji_id="5352721946054268944"),
+                    rich_btn("Get User List TXT", style="success", callback_data="adm_get_userlist_txt", icon_emoji_id="5352861489541714456")
+                ],
+                [
+                    rich_btn("Set Country Rates", style="primary", callback_data="adm_set_country_rate", icon_emoji_id="5348469219761626211"),
+                    rich_btn("Set USD Rate", style="success", callback_data="adm_set_usd_rate", icon_emoji_id="5348469219761626211")
+                ],
+                [
+                    rich_btn(ban_toggle_text, style=ban_toggle_style, callback_data="adm_toggle_autoban", icon_emoji_id="5336944168944047463"),
+                    rich_btn("Demo OTP", style="primary", callback_data="adm_demo_otp", icon_emoji_id="5337302974806922068")
+                ]
+            ]
+            await send_rich_message(context.bot, uid, f"{PEM['gear']} <b>Advanced Admin Panel & Management:</b>", kb); return
+        elif "broadcast" in clean_raw:
+            await msg.reply_text("📢 Enter message:"); context.user_data['state'] = 'ADM_BROAD'; return
+        elif "upload user data" in clean_raw and uid == SUPER_ADMIN_ID:
+            await msg.reply_text("📤 Send backup txt or json file:"); context.user_data['state'] = 'ADM_UP_USER_DB'; return
+
+    if state == 'ADM_SET_USD_RATE_VAL':
+        try:
+            new_rate = float(raw)
+            await set_config_val('usd_rate', str(new_rate))
+            await msg.reply_text(f"{PEM['ok']} Binance USD rate updated to Tk {new_rate:.2f}/$", parse_mode='HTML')
+        except Exception:
+            await msg.reply_text(f"{PEM['no']} Invalid USD rate format.")
+        context.user_data['state'] = None; return
+
+    if state == 'ADM_UP_C':
+        resolved_reg, _ = resolve_country_name_and_code(raw)
+        context.user_data['temp_c'], context.user_data['state'] = resolved_reg, 'ADM_UP_F'
+        await msg.reply_text(f"{PEM['ok']} Country resolved: <b>{resolved_reg}</b>.\n📥 Now upload inventory .txt file.", parse_mode='HTML'); return
+    elif state == 'ADM_BROAD':
+        asyncio.create_task(run_background_broadcast(context, raw))
+        await msg.reply_text("📢 Broadcast started."); context.user_data['state'] = None; return
+    elif state == 'ADM_BAN_U':
+        t_id = raw.strip()
+        if t_id in CACHE_USERS:
+            if not isinstance(CACHE_USERS[t_id], dict):
+                CACHE_USERS[t_id] = {'status': 'banned'}
+            else:
+                CACHE_USERS[t_id]['status'] = 'banned'
+            save_local_db()
+            await msg.reply_text(f"{PEM['ok']} User UID <code>{t_id}</code> has been banned successfully.", parse_mode='HTML')
+        else:
+            await msg.reply_text(f"{PEM['no']} User UID <code>{t_id}</code> not found in database.", parse_mode='HTML')
+        context.user_data['state'] = None; return
+    elif state == 'ADM_UNBAN_U':
+        t_id = raw.strip()
+        if t_id in CACHE_USERS:
+            if not isinstance(CACHE_USERS[t_id], dict):
+                CACHE_USERS[t_id] = {'status': 'active'}
+            else:
+                CACHE_USERS[t_id]['status'] = 'active'
+            
+            if t_id in CACHE_PROCESSED:
+                CACHE_PROCESSED[t_id] = {}
+
+            save_local_db()
+            await msg.reply_text(f"{PEM['ok']} User UID <code>{t_id}</code> has been unbanned. Balance remains safe and 7-day timer reset.", parse_mode='HTML')
+        else:
+            await msg.reply_text(f"{PEM['no']} User UID <code>{t_id}</code> not found in database.", parse_mode='HTML')
+        context.user_data['state'] = None; return
+    elif state == 'ADM_SET_COUNTRY_RATE_VAL':
+        try:
+            target_c = context.user_data.get('target_rate_country')
+            new_rate = float(raw)
+            CACHE_RATES[target_c] = new_rate
+            save_local_db()
+            await msg.reply_text(f"{PEM['ok']} OTP Rate for <b>{target_c}</b> updated to Tk {new_rate:.2f}", parse_mode='HTML')
+        except Exception:
+            await msg.reply_text(f"{PEM['no']} Invalid rate format.")
+        context.user_data['state'] = None; return
+    elif state == 'ADM_ADD_BAL':
+        try:
+            parts = raw.split()
+            t_id, add_amt = parts[0], float(parts[1])
+            if t_id in CACHE_USERS:
+                cur = float(CACHE_USERS[t_id].get('balance', 0.0))
+                CACHE_USERS[t_id]['balance'] = cur + add_amt
+                save_local_db()
+                await msg.reply_text(f"{PEM['ok']} Added Tk {add_amt} to UID {t_id}. New Balance: Tk {CACHE_USERS[t_id]['balance']}")
+            else:
+                await msg.reply_text(f"{PEM['no']} UID not found.")
+        except Exception:
+            await msg.reply_text(f"{PEM['no']} Format error. Use: UID AMOUNT")
+        context.user_data['state'] = None; return
+    elif state == 'ADM_REM_BAL':
+        try:
+            parts = raw.split()
+            t_id, rem_amt = parts[0], float(parts[1])
+            if t_id in CACHE_USERS:
+                cur = float(CACHE_USERS[t_id].get('balance', 0.0))
+                CACHE_USERS[t_id]['balance'] = max(0.0, cur - rem_amt)
+                save_local_db()
+                await msg.reply_text(f"{PEM['ok']} Removed Tk {rem_amt} from UID {t_id}. New Balance: Tk {CACHE_USERS[t_id]['balance']}")
+            else:
+                await msg.reply_text(f"{PEM['no']} UID not found.")
+        except Exception:
+            await msg.reply_text(f"{PEM['no']} Format error. Use: UID AMOUNT")
+        context.user_data['state'] = None; return
+    elif state == 'ADM_USER_LOOKUP':
+        t_id = raw.strip()
+        if t_id in CACHE_USERS:
+            u_info = CACHE_USERS[t_id]
+            p_dict = CACHE_PROCESSED.get(t_id, {})
+            now_dt = datetime.now()
+            daily_breakdown = ""
+            for i in range(7):
+                day_target = (now_dt - timedelta(days=i)).strftime('%Y-%m-%d')
+                cnt = sum(1 for m in p_dict.values() if isinstance(m, dict) and m.get('timestamp', '').startswith(day_target))
+                daily_breakdown += f"• {day_target}: {cnt} OTPs\n"
+            
+            res_text = (
+                f"{PEM['user']} <b>User Details for UID:</b> <code>{t_id}</code>\n"
+                f"👤 Name: {html.escape(u_info.get('name', 'N/A'))}\n"
+                f"💳 Balance: Tk {u_info.get('balance', 0.0):.2f}\n"
+                f"📊 Total OTPs: {u_info.get('otp_count', 0)}\n"
+                f"🛡 Status: {u_info.get('status', 'active')}\n\n"
+                f"📅 <b>OTPs Breakdown (Last 7 Days):</b>\n{daily_breakdown}"
+            )
+            await msg.reply_text(res_text, parse_mode='HTML')
+        else:
+            await msg.reply_text(f"{PEM['no']} User UID not found.")
+        context.user_data['state'] = None; return
+
+    if state == 'IN_W_AMT':
+        try:
+            val_input = float(raw)
+            method = context.user_data.get('w_method', 'Bkash')
+            usd_rate = float(await get_config_val('usd_rate', '126.0'))
+            
+            if method == "Binance":
+                amt = val_input * usd_rate
+                min_usd = 50.0 / usd_rate
+                if val_input < min_usd:
+                    await msg.reply_text(f"❌ Minimum withdraw for Binance is ${min_usd:.2f} (~Tk 50)"); context.user_data['state'] = None; return
+            else:
+                amt = val_input
+                limit = 1000.0
+                if amt < limit:
+                    await msg.reply_text(f"❌ Minimum withdraw for {method} is Tk {limit}"); context.user_data['state'] = None; return
+
+            if float(CACHE_USERS.get(str(uid), {}).get('balance', 0)) < amt:
+                await msg.reply_text("❌ Insufficient balance."); context.user_data['state'] = None; return
+                
+            context.user_data['temp_w_amt'] = amt
+            context.user_data['state'] = 'IN_W_INFO'
+            acc_prompt = "Binance UID / Email / Pay ID:" if method == "Binance" else f"{method} Account Number:"
+            await msg.reply_text(f"📱 Enter your {acc_prompt}")
+        except Exception as e:
+            logger.error(f"Withdraw amount parse error: {e}")
+            await msg.reply_text("❌ Invalid amount format.")
+            context.user_data['state'] = None
+        return
+    elif state == 'IN_W_INFO':
+        amt = context.user_data['temp_w_amt']
+        u_str = str(uid)
+        bal = float(CACHE_USERS.get(u_str, {}).get('balance', 0))
+        usd_rate = float(await get_config_val('usd_rate', '126.0'))
+        method = context.user_data.get('w_method', 'Bkash')
+        
+        if bal >= amt:
+            ref = f"w_{int(datetime.now().timestamp())}"
+            CACHE_WITHDRAWALS[ref] = {
+                'user_id': uid, 'user_name': name, 'amount': amt, 'info': raw, 
+                'method': method, 'status': 'pending', 
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            CACHE_USERS[u_str]['balance'] = bal - amt
+            save_local_db()
+            
+            usd_amt = amt / usd_rate
+            await msg.reply_text(f"✅ Withdraw request submitted!\n🛒 Method: {method}\n💵 Amount: Tk {amt:.2f} (~${usd_amt:.2f})\nRate: Tk {usd_rate}/$")
+        else: 
+            await msg.reply_text("❌ Insufficient balance.")
+        context.user_data['state'] = None
+        return
+
+async def handler_file_up(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in ADMIN_IDS: return
+    state = context.user_data.get('state')
+    
+    if state == 'ADM_UP_USER_DB' and uid == SUPER_ADMIN_ID:
+        try:
+            doc = await update.message.document.get_file()
+            path = f"tmp_{uid}.txt"
+            await doc.download_to_drive(path)
+            with open(path, "r", encoding='utf-8') as f: content = f.read()
+            
+            global CACHE_USERS
+            imported_count = 0
+            for line in content.splitlines():
+                if "UID:" in line and "Balance:" in line:
+                    try:
+                        parts = [p.strip() for p in line.split("|")]
+                        u_id_val = parts[0].replace("UID:", "").strip()
+                        u_name_val = parts[1].replace("Name:", "").replace("Username:", "").strip()
+                        u_bal_val = float(parts[2].replace("Balance:", "").replace("Earnings:", "").replace("Tk", "").strip())
+                        u_otps_val = int(parts[3].replace("OTPs:", "").strip()) if len(parts) > 3 and "OTPs:" in parts[3] else 0
+                        u_status_val = parts[4].replace("Status:", "").strip() if len(parts) > 4 and "Status:" in parts[4] else "active"
+                        
+                        CACHE_USERS[u_id_val] = {
+                            "name": u_name_val,
+                            "balance": u_bal_val,
+                            "otp_count": u_otps_val,
+                            "status": u_status_val
+                        }
+                        imported_count += 1
+                    except Exception as parse_err:
+                        logger.error(f"Line parse error: {parse_err}")
+                        
+            save_local_db()
+            await update.message.reply_text(f"{PEM['ok']} Successfully imported {imported_count} users database!")
+        except Exception as e: 
+            await update.message.reply_text(f"{PEM['no']} Error: {e}")
+        context.user_data['state'] = None; return
+
+    if state != 'ADM_UP_F': return
+    try:
+        temp_input_country = context.user_data.get('temp_c', 'Unknown')
+        doc = await update.message.document.get_file()
+        path = f"tmp_sync_{uid}.txt"
+        await doc.download_to_drive(path)
+        with open(path, "r", encoding='utf-8') as f: nums = [l.strip() for l in f if l.strip()]
+        
+        sample_num = nums[0] if nums else None
+        reg, _ = resolve_country_name_and_code(temp_input_country, sample_number=sample_num)
+        
+        # Include microseconds so two uploads in the same second cannot overwrite each other.
+        batch_id = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        CACHE_STOCK[batch_id] = {
+            "country": reg,
+            "numbers": nums,
+            "uploaded_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+        # CRITICAL: stock must be persisted after every upload.
+        save_local_db()
+
+        await update.message.reply_text(f"{PEM['rocket']} Uploaded {len(nums)} numbers for <b>{reg}</b> (Auto-detected & Stored safely).", parse_mode='HTML')
+    except Exception as e: await update.message.reply_text(f"{PEM['no']} Error: {e}")
+    context.user_data['state'] = None
+
+async def admin_export_user_db(update, context):
+    try:
+        if not CACHE_USERS:
+            await update.effective_chat.send_message("⚠️ <b>User List Empty:</b> কোনো ইউজার রেজিস্টার্ড হয়নি।", parse_mode='HTML')
+            return
+            
+        stream = StringIO()
+        stream.write("👥 Registered Active User List\n" + "="*45 + "\n\n")
+        
+        user_count = 0
+        for u_id, u_val in CACHE_USERS.items():
+            if isinstance(u_val, dict) and int(u_id) not in ADMIN_IDS:
+                status = u_val.get('status', 'active')
+                if status == 'banned': continue
+                    
+                name = u_val.get('name', 'N/A')
+                balance = float(u_val.get('balance', 0.0))
+                otp_cnt = u_val.get('otp_count', 0)
+                
+                stream.write(f"UID: {u_id} | Name: {name} | Balance: Tk {balance:.2f} | OTPs: {otp_cnt} | Status: {status}\n")
+                user_count += 1
+            
+        bio = BytesIO(stream.getvalue().encode('utf-8'))
+        bio.name = f"active_user_list_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=bio, 
+            caption=f"👥 <b>Total Active Users Exported:</b> {user_count}",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"User list export failed: {e}")
+        await update.effective_chat.send_message(f"❌ <b>Export Error:</b> {e}", parse_mode='HTML')
+
+async def dispatch_stock_history_menu(update, context, edit_message_id=None):
+    uid = update.callback_query.from_user.id if update.callback_query else update.effective_user.id
+    chat_id = update.callback_query.message.chat_id if update.callback_query else update.message.chat_id
+    counts = {}
+    for v in CACHE_ASSIGNMENTS.values():
+        if isinstance(v, dict) and v.get('user_id') == uid and v.get('status') == 'assigned':
+            c = v.get('country', 'Global')
+            r_c, _ = resolve_country_name_and_code(c)
+            counts[r_c] = counts.get(r_c, 0) + 1
+    if not counts:
+        text, kb = "📦 No active stock found.", [[rich_btn("Close", style="danger", callback_data="exit_session")]]
+    else:
+        text, kb = "📦 Select country to view stock:", [[rich_btn(f"{c} ({cnt})", "primary", callback_data=f"vstock_{c}", icon_emoji_id=RAW_FLAG_EMOJIS.get(resolve_country_name_and_code(c)[1], {}).get('id', "5780471598922337683"))] for c, cnt in counts.items()]
+        kb.append([rich_btn("Close", style="danger", callback_data="exit_session")])
+    if edit_message_id: await edit_rich_message(context.bot, chat_id, edit_message_id, text, kb)
+    else: await send_rich_message(context.bot, uid, text, kb)
+
+async def display_country_stock(update, context, country):
+    query = update.callback_query
+    uid = query.from_user.id
+    resolved_country, _ = resolve_country_name_and_code(country)
+    
+    # Get active numbers for user and country, sorted by assignment time (newest on top or FIFO order)
+    user_assignments = [
+        v for v in CACHE_ASSIGNMENTS.values()
+        if isinstance(v, dict) and v.get('user_id') == uid and resolve_country_name_and_code(v.get('country'))[0].upper() == resolved_country.upper() and v.get('status') == 'assigned'
+    ]
+    user_assignments.sort(key=lambda x: x.get('assigned_at', ''), reverse=True)
+    nums = [v.get('number') for v in user_assignments][:20]  # Display up to 20 numbers in stock history view
+    
+    text = f"📦 Stock for {resolved_country} ({len(nums)} nos):\n\n" + "".join([f"• <code>+{normalize_num(n)}</code>\n" for n in nums])
+    kb = [[rich_btn("Download .txt", style="success", callback_data=f"dlstock_{resolved_country}")], [rich_btn("Back", style="primary", callback_data="back_stock_hist")]]
+    await edit_rich_message(context.bot, query.message.chat_id, query.message.message_id, text, kb)
+
+async def download_country_stock_file(update, context, country):
+    query = update.callback_query
+    uid = query.from_user.id
+    resolved_country, _ = resolve_country_name_and_code(country)
+    
+    user_assignments = [
+        v for v in CACHE_ASSIGNMENTS.values()
+        if isinstance(v, dict) and v.get('user_id') == uid and resolve_country_name_and_code(v.get('country'))[0].upper() == resolved_country.upper() and v.get('status') == 'assigned'
+    ]
+    user_assignments.sort(key=lambda x: x.get('assigned_at', ''), reverse=True)
+    nums = [normalize_num(v.get('number')) for v in user_assignments][:20]
+    
+    stream = StringIO()
+    for n in nums: stream.write(f"+{n}\n")
+    bio = BytesIO(stream.getvalue().encode('utf-8'))
+    bio.name = f"{resolved_country}_stock.txt"
+    await context.bot.send_document(chat_id=uid, document=bio, caption=f"📄 Stock export for {resolved_country}")
+
+async def run_background_broadcast(context, payload):
+    for u_id in CACHE_USERS.keys():
+        try: await send_rich_message(context.bot, int(u_id), f'📢 <b>Notice:</b>\n\n{payload}', []); await asyncio.sleep(0.035)
+        except: pass
+
+async def dispatch_payout_ui(update, context):
+    pending = False
+    usd_rate = float(await get_config_val('usd_rate', '126.0'))
+    for w_id, w in CACHE_WITHDRAWALS.items():
+        if isinstance(w, dict) and w.get('status') == 'pending':
+            pending = True
+            amt = float(w.get('amount', 0))
+            usd_amt = amt / usd_rate
+            kb = [
+                [rich_btn("Copy Info", "primary", copy_text=str(w.get('info')))],
+                [rich_btn("Authorize", "success", f"adm_pay_acc_{w_id}"), rich_btn("Reject", "danger", f"adm_pay_rej_{w_id}")]
+            ]
+            await send_rich_message(context.bot, update.message.chat_id, f"💸 <b>Withdraw Req</b>\nID: <code>{w_id}</code>\nName: {html.escape(w.get('user_name'))}\nAmount: Tk {amt:.2f} (~${usd_amt:.2f} @ {usd_rate}/$)\nMethod: {w.get('method')}\nInfo: <code>{w.get('info')}</code>", kb)
+    if not pending: await update.message.reply_text("🏁 Withdraw queue empty.")
+
+async def dispatch_wipe_ui(update, context):
+    countries = set()
+    for v in CACHE_STOCK.values():
+        if isinstance(v, dict) and v.get('country'):
+            r_c, _ = resolve_country_name_and_code(v.get('country'))
+            countries.add(r_c)
+    if countries: await send_rich_message(context.bot, update.message.chat_id, "🚨 <b>Purge stock:</b>", [[rich_btn(f"Purge: {c}", "danger", f"adm_del_{c}", icon_emoji_id=RAW_FLAG_EMOJIS.get(resolve_country_name_and_code(c)[1], {}).get('id', "5780471598922337683"))] for c in countries])
+    else: await update.message.reply_text("⚠️ Inventory empty.")
+
+async def dispatch_leaderboard(update):
+    scores = {}
+    midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+    for u_id, p in CACHE_PROCESSED.items():
+        if isinstance(p, dict):
+            cnt = sum(1 for m in p.values() if isinstance(m, dict) and m.get('timestamp', '') >= midnight)
+            if cnt > 0: scores[u_id] = cnt
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    if sorted_scores:
+        out = f"{PEM['lb_head']} <b>Daily Ranking:</b>\n\n"
+        for i, (u_id, score) in enumerate(sorted_scores[:10], 1):
+            u_name = CACHE_USERS.get(str(u_id), {}).get('name', 'User')
+            if i == 1:
+                rank_em = PEM["lb_1"]
+            elif i == 2:
+                rank_em = PEM["lb_2"]
+            elif i == 3:
+                rank_em = PEM["lb_3"]
+            elif i == 4:
+                rank_em = PEM["lb_4"]
+            elif i == 5:
+                rank_em = PEM["lb_5"]
+            elif i == 6:
+                rank_em = PEM["lb_6"]
+            elif i == 7:
+                rank_em = PEM["lb_7"]
+            elif i == 8:
+                rank_em = PEM["lb_8"]
+            elif i == 9:
+                rank_em = PEM["lb_9"]
+            else:
+                rank_em = PEM["lb_10"]
+            out += f"{rank_em} {mask_username(u_name)} - OTP: {score}\n"
+        await update.message.reply_text(out, parse_mode='HTML')
+    else: await update.message.reply_text("⏱️ No activity yet.")
+
+async def check_is_restricted(uid):
+    return CACHE_USERS.get(str(uid), {}).get('status') == 'banned'
+
+async def app_post_init(app):
+    global bot_application_instance
+    bot_application_instance = app
+    await start_webhook_server()
+    logger.info("Direct Postback Webhook Engine initialized.")
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception occurred during live update cycle:", exc_info=context.error)
 
 if __name__ == '__main__':
-    TOKEN = "8806245279:AAF5ZmzILNkpqhrt7x0ogl_WxQM_kBj3IGs"
-    
-    app = ApplicationBuilder().token(TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", lambda u, c: handle_message(u, c)))
-    app.add_handler(MessageHandler(filters.TEXT | filters.Document.ALL & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(button_callback))
-
-    async def post_init(application):
-        asyncio.create_task(run_web_server(application))
-
-    app.post_init = post_init
-
-    app.run_polling()
+    try:
+        instance = ApplicationBuilder().token(TOKEN).request(HTTPXRequest(connection_pool_size=8, read_timeout=20.0, write_timeout=20.0, connect_timeout=15.0)).post_init(app_post_init).build()
+        instance.add_handler(CommandHandler("start", handle_start))
+        instance.add_handler(CallbackQueryHandler(router_callbacks))
+        instance.add_handler(MessageHandler(filters.Document.ALL, handler_file_up))
+        instance.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), router_text))
+        instance.add_error_handler(error_handler)
+        
+        logger.info("Terminal tactical build fully stabilized with custom country rates and auto name/flag resolution.")
+        instance.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        logger.critical(f"Panic Shutdown: {e}")
